@@ -89,4 +89,3 @@ def creareDatasetCropatFisiere():
 if __name__ == "__main__":
     afiseazaFiecareImagineCuBoundingBoxes("dexter")
     # creeazaFisierTotalAdnotari()
-
