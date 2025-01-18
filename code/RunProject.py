@@ -1,27 +1,31 @@
 from Parameters import *
-from FacialDetectorDexter import *
-from Visualize import *
-import numpy as np
-import os
-import glob
-from RunModelTrainer import train_model
-from RunClassifierOnData import run_classifier
+from RunClassifierOnData import run_detector, run_cnn_classifier
+from RunModelTrainer import train_model  # Changed import to correct file
 
 def main():
-    print("Choose operation:")
-    print("1. Train model")
-    print("2. Run classifier on data")
-    print("3. Both")
+    print("\nChoose operation:")
+    print("1. Train classifier")
+    print("2. Run face detection")
+    print("3. Run CNN classification on detections")
+    print("4. Run complete pipeline (detection + classification)")
     
-    choice = input("Enter your choice (1-3): ")
+    choice = input("Enter your choice (1-4): ")
+    
+    params = Parameters()
     
     if choice == "1":
+        print("\nTraining classifier...")
         train_model()
     elif choice == "2":
-        run_classifier()
+        print("\nRunning face detection...")
+        run_detector(params)
     elif choice == "3":
-        facial_detector = train_model()
-        run_classifier()
+        print("\nRunning CNN classification on existing detections...")
+        run_cnn_classifier(params)
+    elif choice == "4":
+        print("\nRunning complete pipeline...")
+        run_detector(params)
+        run_cnn_classifier(params)
     else:
         print("Invalid choice!")
 

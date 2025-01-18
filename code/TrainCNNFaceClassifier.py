@@ -7,12 +7,11 @@ from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
 
-# Set device
+# Set device silently
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
 
 # Create save directory if it doesn't exist
-save_dir = os.path.join('../antrenare', 'fisiere_salvate_algoritm')
+save_dir = os.path.join('antrenare', 'fisiere_salvate_algoritm')
 os.makedirs(save_dir, exist_ok=True)
 
 # Data augmentation and transforms
@@ -22,7 +21,6 @@ train_transforms = transforms.Compose([
     transforms.RandomRotation(15),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
     transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
-    transforms.RandomApply([transforms.GaussianBlur(3)], p=0.3),  # Added blur augmentation
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -57,10 +55,7 @@ class ClasificatorCNN(nn.Module):
             nn.Conv2d(128, 256, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(256),
-            nn.MaxPool2d(2),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),  # New: Additional convolutional layer for better feature extraction
-            nn.ReLU(),
-            nn.BatchNorm2d(256)
+            nn.MaxPool2d(2)
         )
         return model
     
@@ -68,12 +63,8 @@ class ClasificatorCNN(nn.Module):
         model = nn.Sequential(
             nn.Linear(256 * 12 * 12, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),  # Added batch norm
             nn.Dropout(0.5),
-            nn.Linear(512, 256),  # New intermediate layer
-            nn.ReLU(),
-            nn.Dropout(0.3),  # Lower dropout for deeper layer
-            nn.Linear(256, num_classes)  # Modified for num_classes output
+            nn.Linear(512, num_classes)  # Modified for num_classes output
         )
         return model
     
@@ -82,14 +73,6 @@ class ClasificatorCNN(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.strat_final(x)
         return x
-
-def save_model(model, epoch, accuracy, save_dir):
-    """Save model with proper metadata"""
-    os.makedirs(save_dir, exist_ok=True)
-    model_name = f'model_cnn_faces_trained_epoch_{epoch}_acc_{accuracy:.4f}.pth'
-    model_path = os.path.join(save_dir, model_name)
-    torch.save(model.state_dict(), model_path, _use_new_zipfile_serialization=True)
-    print(f"Model saved to {model_path}")
 
 def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epochs=50):
     model = model.to(device)
@@ -139,7 +122,8 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epo
             best_accuracy = accuracy
             best_weights = model.state_dict()
             best_epoch = epoch + 1
-            save_model(model, best_epoch, accuracy, save_dir)
+            model_path = os.path.join(save_dir, f'model_cnn_faces_trained_epoch_{best_epoch}_acc_{accuracy:.4f}.pth')
+            torch.save(best_weights, model_path)
             print(f'New best model saved! Accuracy: {best_accuracy:.4f}')
     
     # Load best model

@@ -4,6 +4,9 @@ from skimage.feature import hog
 from Parameters import Parameters
 import itertools
 import os
+from TrainSVMModel import compute_hog_features  # Add this import
+import multiprocessing as mp
+from itertools import product
 
 class SlidingWindowDetector:
     def __init__(self, params, model, scaler):
@@ -13,7 +16,8 @@ class SlidingWindowDetector:
         self.feature_dim = scaler.n_features_in_
         
         # Calculate HOG parameters without printing
-        self.window_size = 64
+        self.window_size = 128  # Fixed size
+        self.stride = 32       # Larger stride
         test_img = np.zeros((self.window_size, self.window_size))
         self.hog_params = self._get_matching_hog_params(test_img)
         
@@ -46,16 +50,6 @@ class SlidingWindowDetector:
         
         return fixed_params
 
-    def compute_features(self, window):
-        """Simplified feature computation with fixed parameters"""
-        # Enhance contrast
-        window = cv.equalizeHist(window)
-        
-        # Resize and compute HOG with fixed parameters
-        window_resized = cv.resize(window, (64, 64))  # Fixed size
-        features = hog(window_resized, feature_vector=True, **self.hog_params)
-        return features
-        
     def _generate_window_sizes(self, min_size=60, max_size=200, num_sizes=10):
         """Generate window sizes with variable aspect ratios"""
         widths = np.linspace(min_size, max_size, num_sizes, dtype=int)
@@ -80,6 +74,18 @@ class SlidingWindowDetector:
         return filtered_sizes
         
     def detect_faces(self, image):
+        """Simplified detection with single scale"""
+        # Resize large images
+        max_size = 800
+        if max(image.shape[:2]) > max_size:
+            scale = max_size / max(image.shape[:2])
+            new_size = (int(image.shape[1] * scale), int(image.shape[0] * scale))
+            image = cv.resize(image, new_size)
+        
+        # Single scale detection
+        return self.detect_faces_at_scale(image, self.window_size, self.model, self.scaler)
+
+    def detect_faces_at_scale(self, image, window_size, model, scaler):
         """Run sliding window detection using unified model"""
         if len(image.shape) == 3:
             gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
@@ -127,24 +133,15 @@ class SlidingWindowDetector:
                     window_resized = cv.resize(window, (64, 64))  # Fixed size for HOG
                     
                     # Get HOG features
-                    features = hog(window_resized,
-                                 pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
-                                 cells_per_block=(2, 2),
-                                 orientations=9,
-                                 feature_vector=True)
+                    features = compute_hog_features(window, self.params)
                     
-                    # Verify feature dimension
-                    if len(features) != self.feature_dim:
-                        continue
-                    
-                    # Scale features and predict
-                    features_scaled = self.scaler.transform([features])
-                    score = self.model.decision_function(features_scaled)[0]
-                    
-                    # Even stricter score filtering
-                    if score >= detection_threshold and score > 3.5:  # Added minimum score requirement
-                        all_detections.append([x, y, x + window_width, y + window_height])
-                        all_scores.append(score)
+                    if features is not None and len(features) == self.feature_dim:
+                        features_scaled = scaler.transform([features])
+                        score = model.decision_function(features_scaled)[0]
+                        
+                        if score >= self.params.threshold:
+                            all_detections.append([x, y, x + window_width, y + window_height])
+                            all_scores.append(score)
         
         # Additional score filtering before returning
         if len(all_detections) > 0:
@@ -154,7 +151,69 @@ class SlidingWindowDetector:
             return detections_array[high_score_mask], scores_array[high_score_mask]
         
         return np.array([]), np.array([])
+
+    def detect_faces_parallel(self, image, window_size, model, scaler):
+        """Parallel sliding window detection"""
+        if len(image.shape) == 3:
+            gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        else:
+            gray = image
         
+        # Apply preprocessing
+        gray = cv.equalizeHist(gray)
+        h, w = gray.shape
+        stride = self.params.sliding_window_stride
+        
+        # Create coordinates list for parallel processing
+        y_coords = range(0, h - window_size + 1, stride)
+        x_coords = range(0, w - window_size + 1, stride)
+        coords = list(product(y_coords, x_coords))
+        
+        # Split coordinates for parallel processing
+        num_processes = min(12, mp.cpu_count())
+        chunk_size = len(coords) // num_processes
+        
+        # Create processing pool
+        with mp.Pool(processes=num_processes) as pool:
+            process_window_partial = partial(
+                self._process_window,
+                image=gray,
+                window_size=window_size,
+                model=model,
+                scaler=scaler
+            )
+            results = pool.map(process_window_partial, coords)
+        
+        # Combine results
+        detections = []
+        scores = []
+        for det, score in results:
+            if det is not None:
+                detections.append(det)
+                scores.append(score)
+        
+        return np.array(detections) if detections else np.array([]), \
+               np.array(scores) if scores else np.array([])
+
+    def _process_window(self, coord, image, window_size, model, scaler):
+        """Process a single window"""
+        y, x = coord
+        x2, y2 = x + window_size, y + window_size
+        window = image[y:y2, x:x2]
+        
+        # Get features
+        features = compute_hog_features(window, self.params)
+        if features is None or len(features) != self.feature_dim:
+            return None, None
+            
+        # Scale and predict
+        features_scaled = scaler.transform([features])
+        score = model.decision_function(features_scaled)[0]
+        
+        if score >= self.params.threshold:
+            return [x, y, x2, y2], score
+        return None, None
+
     def visualize_all_windows(self):
         """Store visualization without displaying"""
         # Create canvas matching test image dimensions

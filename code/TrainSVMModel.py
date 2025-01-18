@@ -1,5 +1,5 @@
 import numpy as np
-from sklearn.linear_model import SGDClassifier
+from sklearn.svm import SVC  # Changed from LinearSVC to SVC for RBF kernel
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.class_weight import compute_class_weight
 import pickle
@@ -7,137 +7,145 @@ import os
 from Parameters import Parameters
 from skimage.feature import hog
 import cv2 as cv
+from functools import partial
+import multiprocessing as mp
+from itertools import product
+from tqdm import tqdm
 
-def compute_fixed_features(feature_vector, target_size=64):
-    """Ensure all feature vectors have consistent dimensions"""
-    if len(feature_vector.shape) == 1:
-        # If already 1D, verify length is consistent
-        expected_length = compute_expected_features_length(target_size)
-        if len(feature_vector) == expected_length:
-            return feature_vector
-    
-    # Compute expected feature length
-    expected_length = compute_expected_features_length(target_size)
-    
-    # Return properly sized feature vector
-    return np.resize(feature_vector, expected_length)
+# Make this function available for import
+__all__ = ['compute_hog_features', 'train_unified_model']
 
-def compute_expected_features_length(window_size, cell_size=8):
-    """Calculate expected HOG feature dimension for a given window size"""
-    cells_per_block = 2
-    block_stride = 1
-    orientations = 9
+def compute_hog_features(image, params):
+    """Enhanced HOG feature computation with corrected dimension checking"""
+    if len(image.shape) == 3:
+        gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    else:
+        gray = image
     
-    cells_in_window = window_size // cell_size
-    blocks_in_window = cells_in_window - (cells_per_block - block_stride)
+    # Basic preprocessing
+    gray = cv.equalizeHist(gray)
+    gray = cv.resize(gray, (80, 80))  # Fixed size for consistent features
     
-    features_per_block = cells_per_block * cells_per_block * orientations
-    total_features = blocks_in_window * blocks_in_window * features_per_block
-    
-    return total_features
-
-def train_unified_model(params: Parameters, training_examples, train_labels):
-    """Enhanced training with better batching and learning rate scheduling"""
-    print("\nTraining unified model...")
-    
-    model_file = os.path.join(params.dir_save_files, 'unified_svm_model.pkl')
-    scaler_file = os.path.join(params.dir_save_files, 'unified_scaler.pkl')
-    
-    # Calculate class weights
-    all_labels = []
-    for window_size in params.sizes_array:
-        all_labels.extend(train_labels[window_size])
-    all_labels = np.array(all_labels)
-    classes = np.array([0, 1])
-    class_weights = compute_class_weight('balanced', classes=classes, y=all_labels)
-    class_weight_dict = {0: class_weights[0], 1: class_weights[1]}
-    
-    # Enhanced SGD classifier with stronger parameters
-    svm = SGDClassifier(
-        loss='hinge',
-        max_iter=10000,  # Increased iterations
-        tol=1e-9,       # Tighter tolerance
-        alpha=0.00001,   # Reduced regularization
-        learning_rate='adaptive',
-        eta0=0.1,       # Higher initial learning rate
-        power_t=0.2,    # Slower learning rate decay
-        class_weight=class_weight_dict,
-        random_state=42,
-        warm_start=True,
-        average=10      # Use averaged SGD with more iterations
-    )
-    
-    scaler = StandardScaler(with_mean=True, with_std=True)
-    
-    # Increased batch size for better stability
-    batch_size = 4000  # Doubled from previous
-    
-    # Process and validate all features first
-    print("\nPreprocessing and validating features...")
-    valid_features_dict = {}
-    valid_labels_dict = {}
-    
-    for window_size in params.sizes_array:
-        pos_features = training_examples[window_size][:params.number_positive_examples]
-        neg_features = training_examples[window_size][-params.number_negative_examples:]
+    try:
+        hog_params = params.hog_params.copy()
+        features = hog(
+            gray,
+            orientations=hog_params['orientations'],
+            pixels_per_cell=hog_params['pixels_per_cell'],
+            cells_per_block=hog_params['cells_per_block'],
+            block_norm=hog_params['block_norm'],
+            transform_sqrt=hog_params['transform_sqrt'],
+            feature_vector=True
+        )
         
-        # Validate and collect features
-        valid_pos = [f for f in pos_features if len(f) == params.expected_features]
-        valid_neg = [f for f in neg_features if len(f) == params.expected_features]
+        if len(features) == params.expected_features:
+            return features
+            
+        # More informative error message
+        cells_y = gray.shape[0] // hog_params['pixels_per_cell'][0]
+        cells_x = gray.shape[1] // hog_params['pixels_per_cell'][1]
+        blocks_y = cells_y - hog_params['cells_per_block'][0] + 1
+        blocks_x = cells_x - hog_params['cells_per_block'][1] + 1
+        expected_features = (blocks_y * blocks_x * 
+                           hog_params['cells_per_block'][0] * 
+                           hog_params['cells_per_block'][1] * 
+                           hog_params['orientations'])
+                           
+        print(f"HOG calculation details:")
+        print(f"- Image size: {gray.shape}")
+        print(f"- Cells grid: {cells_y}x{cells_x}")
+        print(f"- Blocks grid: {blocks_y}x{blocks_x}")
+        print(f"- Expected features: {expected_features}")
+        print(f"- Got features: {len(features)}")
         
-        valid_features_dict[window_size] = np.vstack((valid_pos, valid_neg))
-        valid_labels_dict[window_size] = np.concatenate((
-            np.ones(len(valid_pos)),
-            np.zeros(len(valid_neg))
+        # Update params if needed
+        if expected_features != params.expected_features:
+            print(f"Warning: Parameters expected_features needs update to {expected_features}")
+            params.expected_features = expected_features
+            return features
+            
+        return None
+            
+    except Exception as e:
+        print(f"Error computing HOG features: {e}")
+        return None
+
+def train_single_model(args):
+    """Quiet training function for parallel processing"""
+    window_size, X, y, params = args
+    
+    try:
+        # Calculate weights
+        n_pos = np.sum(y == 1)
+        n_neg = np.sum(y == 0)
+        total = n_pos + n_neg
+        weights = {1: total/(2.0*n_pos), 0: total/(2.0*n_neg)}
+        
+        # Normalize features first
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Initialize model with better convergence parameters
+        svm = SVC(
+            kernel='rbf',
+            C=0.1,              # Reduced from 1.0 for better convergence
+            gamma='auto',       # Changed from 'scale' to 'auto'
+            class_weight=weights,
+            cache_size=2000,    # Increased cache for faster convergence
+            probability=False,
+            random_state=42,
+            verbose=False,
+            tol=1e-2,          # Increased tolerance for faster convergence
+            max_iter=5000,     # Reduced iterations since we improved other parameters
+            shrinking=True     # Enable shrinking heuristic
+        )
+        
+        # Train with scaled data
+        svm.fit(X_scaled, y)
+        
+        # Save model
+        pickle.dump(svm, open(os.path.join(params.dir_save_files, f'svm_model_{window_size}.pkl'), 'wb'))
+        pickle.dump(scaler, open(os.path.join(params.dir_save_files, f'scaler_{window_size}.pkl'), 'wb'))
+        
+        return window_size, svm, scaler
+        
+    except Exception as e:
+        return window_size, None, None
+
+def train_unified_model(params: Parameters, training_examples_dict, train_labels_dict):
+    """Parallel model training with minimal output"""
+    # Print initial statistics
+    print("\nTraining data statistics:")
+    for window_size in params.sizes_array:
+        y = train_labels_dict[window_size]
+        print(f"Window {window_size}x{window_size}: {np.sum(y == 1)} positive, {np.sum(y == 0)} negative samples")
+    
+    # Prepare training arguments
+    training_args = [(size, training_examples_dict[size], train_labels_dict[size], params) 
+                    for size in params.sizes_array]
+    
+    # Use fewer processes to give each more resources
+    num_processes = min(6, mp.cpu_count())  # Reduced from 10 to 6
+    print(f"\nStarting parallel training with {num_processes} processes...")
+    
+    with mp.Pool(processes=num_processes) as pool:
+        results = list(tqdm(
+            pool.imap(train_single_model, training_args),
+            total=len(params.sizes_array),
+            desc="Training models"
         ))
-        
-        print(f"Window {window_size}: {len(valid_pos)} positive, {len(valid_neg)} negative")
     
-    # Training loop with multiple epochs
-    n_epochs = 10  # Increased from 3
-    best_score = float('-inf')
+    # Process results
+    best_model = {}
+    scalers = {}
+    for window_size, model, scaler in results:
+        if model is not None and scaler is not None:
+            best_model[window_size] = model
+            scalers[window_size] = scaler
     
-    for epoch in range(n_epochs):
-        print(f"\nEpoch {epoch + 1}/{n_epochs}")
-        
-        # Shuffle window sizes for each epoch
-        window_sizes = list(params.sizes_array)
-        np.random.shuffle(window_sizes)
-        
-        for window_size in window_sizes:
-            features = valid_features_dict[window_size]
-            labels = valid_labels_dict[window_size]
-            
-            # Shuffle data
-            shuffle_idx = np.random.permutation(len(features))
-            features = features[shuffle_idx]
-            labels = labels[shuffle_idx]
-            
-            # Process in batches
-            for i in range(0, len(features), batch_size):
-                batch_features = features[i:i + batch_size]
-                batch_labels = labels[i:i + batch_size]
-                
-                # Scale features
-                if i == 0 and epoch == 0:
-                    batch_features = scaler.fit_transform(batch_features)
-                else:
-                    batch_features = scaler.transform(batch_features)
-                
-                # Train on batch
-                svm.partial_fit(batch_features, batch_labels, classes=[0, 1])
-                
-                # Compute and print loss
-                score = svm.score(batch_features, batch_labels)
-                if score > best_score:
-                    best_score = score
-                    # Save best model
-                    with open(model_file, 'wb') as f:
-                        pickle.dump(svm, f)
-                    with open(scaler_file, 'wb') as f:
-                        pickle.dump(scaler, f)
-                
-                print(f"Batch score: {score:.4f} (best: {best_score:.4f})")
+    # Verify all models trained successfully
+    missing_models = [size for size in params.sizes_array if size not in best_model]
+    if missing_models:
+        raise RuntimeError(f"Failed to train models for sizes: {missing_models}")
     
-    print(f"\nTraining completed. Best score: {best_score:.4f}")
-    return svm, scaler
+    return best_model, scalers
