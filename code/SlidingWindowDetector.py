@@ -56,52 +56,68 @@ class SlidingWindowDetector:
         features = hog(window_resized, feature_vector=True, **self.hog_params)
         return features
         
-    def _generate_window_sizes(self, min_size=60, max_size=200, num_sizes=10):
+    def _generate_window_sizes(self, min_size=60, max_size=300, num_base_sizes=15):
         """Generate window sizes with variable aspect ratios"""
-        widths = np.linspace(min_size, max_size, num_sizes, dtype=int)
-        heights = np.linspace(min_size, max_size, num_sizes, dtype=int)
+        # Generate base sizes using logarithmic spacing for better small-size coverage
+        base_sizes = np.logspace(np.log10(min_size), np.log10(max_size), num_base_sizes, dtype=int)
         
-        # Generate all combinations
-        all_combinations = list(itertools.product(widths, heights))
+        # Generate aspect ratios (from 0.5 to 2.0)
+        aspect_ratios = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.33, 1.5, 2.0]
         
-        # Filter combinations to get around 100 total windows
-        # Keep windows with reasonable aspect ratios (between 0.5 and 2.0)
+        # Generate combinations
         filtered_sizes = []
-        for w, h in all_combinations:
-            aspect_ratio = w / h
-            if 0.5 <= aspect_ratio <= 2.0:
-                filtered_sizes.append((w, h))
+        for base_size in base_sizes:
+            for ratio in aspect_ratios:
+                width = int(base_size * np.sqrt(ratio))
+                height = int(base_size / np.sqrt(ratio))
+                
+                # Ensure dimensions are within bounds
+                if min_size <= width <= max_size and min_size <= height <= max_size:
+                    # Avoid duplicate sizes
+                    size_tuple = (width, height)
+                    if size_tuple not in filtered_sizes:
+                        filtered_sizes.append(size_tuple)
         
-        # If we have too many windows, sample them
-        if len(filtered_sizes) > 100:
-            indices = np.linspace(0, len(filtered_sizes)-1, 100, dtype=int)
-            filtered_sizes = [filtered_sizes[i] for i in indices]
-            
+        # Sort by area for better processing order
+        filtered_sizes.sort(key=lambda x: x[0] * x[1])
+        
+        # If we have more than 150 windows, sample them intelligently
+        if len(filtered_sizes) > 150:
+            # Keep more small windows and fewer large windows
+            weights = [1.0 / (w * h) for w, h in filtered_sizes]
+            weights = np.array(weights) / sum(weights)
+            indices = np.random.choice(
+                len(filtered_sizes), 
+                size=150, 
+                replace=False, 
+                p=weights
+            )
+            filtered_sizes = [filtered_sizes[i] for i in sorted(indices)]
+        
         return filtered_sizes
         
     def detect_faces(self, image):
-        """Run sliding window detection using unified model"""
+        """Faster sliding window detection with strict threshold"""
         if len(image.shape) == 3:
             gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
         else:
             gray = image
             
-        # Apply preprocessing
-        gray = cv.equalizeHist(gray)
-        integral_img = cv.integral(gray)
-        integral_sqr = cv.integral(np.float32(gray) ** 2)
-        
         all_detections = []
         all_scores = []
         
-        # Process each window configuration
-        for window_width, window_height in self.window_sizes:
-            # Adaptive stride based on window size
-            stride_w = max(8, window_width // 16)
-            stride_h = max(8, window_height // 16)
+        # Pre-compute integral images
+        integral_img = cv.integral(gray)
+        integral_sqr = cv.integral(np.float32(gray) ** 2)
+        
+        # Faster processing
+        for window_width, window_height in self.window_sizes[::2]:  # Skip every other size
+            # Much larger stride
+            stride_w = max(24, window_width // 6)
+            stride_h = max(24, window_height // 6)
             
-            # More strict score thresholding
-            detection_threshold = self.params.threshold * 0.9  # Using 90% of threshold for initial detection
+            # Quick variance check threshold
+            var_threshold = 50  # Lower threshold = skip more windows
             
             # Slide window
             for y in range(0, gray.shape[0] - window_height + 1, stride_h):
@@ -119,18 +135,18 @@ class SlidingWindowDetector:
                     mean = sum_val / area
                     variance = (sum_sqr / area) - (mean ** 2)
                     
-                    if variance < 100:  # Skip low-variance regions
+                    if variance < var_threshold:  # Skip low-variance regions
                         continue
-                        
-                    # Extract and resize window to fixed size for HOG
+                    
+                    # Extract and resize window
                     window = gray[y:y2, x:x2]
-                    window_resized = cv.resize(window, (64, 64))  # Fixed size for HOG
+                    window_resized = cv.resize(window, (64, 64))
                     
                     # Get HOG features
                     features = hog(window_resized,
                                  pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
-                                 cells_per_block=(2, 2),
-                                 orientations=9,
+                                 cells_per_block=(self.params.cells_per_block, self.params.cells_per_block),
+                                 orientations=self.params.orientations,
                                  feature_vector=True)
                     
                     # Verify feature dimension
@@ -141,12 +157,12 @@ class SlidingWindowDetector:
                     features_scaled = self.scaler.transform([features])
                     score = self.model.decision_function(features_scaled)[0]
                     
-                    # Even stricter score filtering
-                    if score >= detection_threshold and score > 3.5:  # Added minimum score requirement
+                    # Score filtering
+                    if score >= self.params.threshold:
                         all_detections.append([x, y, x + window_width, y + window_height])
                         all_scores.append(score)
         
-        # Additional score filtering before returning
+        # Strict threshold check - only keep detections above 10000
         if len(all_detections) > 0:
             detections_array = np.array(all_detections)
             scores_array = np.array(all_scores)

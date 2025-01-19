@@ -24,8 +24,8 @@ def show_detections_without_ground_truth(detections, scores, file_names, params:
             current_detections = detections[indices_detections_current_image]
             current_scores = scores[indices_detections_current_image]
             
-            # More strict filtering for scores
-            mask = current_scores >= params.threshold  # Changed > to >=
+            # Strict threshold filter
+            mask = current_scores >= 10000  # Hard-coded strict threshold
             current_detections = current_detections[mask]
             current_scores = current_scores[mask]
             
@@ -94,8 +94,8 @@ def show_detections_with_ground_truth(detections, scores, file_names, params: Pa
         current_detections = detections[indices_detections_current_image]
         current_scores = scores[indices_detections_current_image]
         
-        # More strict filtering for scores
-        mask = current_scores >= params.threshold  # Changed > to >=
+        # Strict threshold filter
+        mask = current_scores >= 10000  # Hard-coded strict threshold
         current_detections = current_detections[mask]
         current_scores = current_scores[mask]
 

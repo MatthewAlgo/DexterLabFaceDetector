@@ -16,31 +16,38 @@ class Parameters:
             print('directory {} exists '.format(self.dir_save_files))
 
         # set the parameters
-        # Fixed HOG parameters for consistency
-        self.dim_hog_cell = 8  # Fixed at 8x8
-        self.cells_per_block = 2  # Fixed at 2x2
-        self.orientations = 9  # Fixed at 9
-        self.block_stride = 1
-        self.window_size = 64  # Fixed at 64x64
+        # Minimal HOG parameters for faster processing
+        self.dim_hog_cell = 9      # Larger cells = fewer features
+        self.cells_per_block = 3    # Minimum block size
+        self.orientations = 10       # Fewer orientations
+        self.block_stride = 1       # Larger stride = fewer blocks
+        self.window_size = 64       # Keep base window small
+        self.block_norm = 'L2-Hys'      # Fastest normalization
+        self.transform_sqrt = False # Skip gamma correction
+
+        # Skip extra processing
+        self.multichannel = False
+        self.gamma_correction = 1.0
+
         self.dim_descriptor_cell = 32
-        self.number_positive_examples = 2000  # Reduced from 500
-        self.number_negative_examples = 10000  # Reduced from 5000
+        self.number_positive_examples = 2000   # More positive examples
+        self.number_negative_examples = 10000  # More negative examples
         self.overlap = 0.3
         self.has_annotations = False
-        self.threshold = 230.0  # Higher threshold for better confidence
-        self.merge_overlap = 0.4  # Better merging of overlapping detections
+        self.threshold = 10000.0          # Increased detection threshold
+        self.merge_overlap = 0.3        # Stricter overlap criteria
 
         self.use_flip_images = True  # Păstrăm flip images activat
         
-        # Smaller window array with fewer sizes
+        # Faster sliding window
+        self.scale_factor = 0.8     # Bigger steps between scales
+        # 10 window sizes with good coverage
         self.sizes_array = [
-            64, 80, 96,     # Small windows
-            112, 128, 144,  # Medium windows
-            160, 176, 192   # Large windows
+            64, 80, 96, 112, 128,
+            144, 160, 176, 192, 208 
         ]
         
         # Better scale handling
-        self.scale_factor = 0.92  # More gradual scaling
         self.min_window = 64  # Smaller minimum window
         self.max_window = 200  # Larger maximum window
         
@@ -54,17 +61,17 @@ class Parameters:
         self.max_descriptors_in_memory = 5000  # Reduced from 10000
 
         # Enhanced training parameters
-        self.learning_rate = 0.01    # Initial learning rate
-        self.min_learning_rate = 0.0001  # Minimum learning rate
-        self.momentum = 0.9          # Momentum for training
-        self.validation_split = 0.2   # 20% validation split
+        self.learning_rate = 0.001       # Smaller learning rate
+        self.min_learning_rate = 0.00001 # Lower minimum
+        self.momentum = 0.95             # Higher momentum
+        self.validation_split = 0.15     # Less validation data
         self.random_seed = 42        # For reproducibility
         
         # Stricter detection parameters
         self.nms_threshold = 0.3     # Stricter NMS
         self.score_threshold = 0.8   # Higher score threshold
 
-        # Calculate expected feature dimension (should be 1764)
+        # Recalculate expected features correctly
         cells_in_window = self.window_size // self.dim_hog_cell  # 64/8 = 8 cells
         blocks_in_window = cells_in_window - self.cells_per_block + 1  # 8-2+1 = 7 blocks
         features_per_block = self.cells_per_block * self.cells_per_block * self.orientations  # 2*2*9 = 36

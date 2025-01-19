@@ -37,107 +37,114 @@ def compute_expected_features_length(window_size, cell_size=8):
     return total_features
 
 def train_unified_model(params: Parameters, training_examples, train_labels):
-    """Enhanced training with better batching and learning rate scheduling"""
+    """Enhanced training with better feature validation"""
     print("\nTraining unified model...")
     
     model_file = os.path.join(params.dir_save_files, 'unified_svm_model.pkl')
     scaler_file = os.path.join(params.dir_save_files, 'unified_scaler.pkl')
     
-    # Calculate class weights
-    all_labels = []
-    for window_size in params.sizes_array:
-        all_labels.extend(train_labels[window_size])
-    all_labels = np.array(all_labels)
-    classes = np.array([0, 1])
-    class_weights = compute_class_weight('balanced', classes=classes, y=all_labels)
-    class_weight_dict = {0: class_weights[0], 1: class_weights[1]}
+    # Better feature validation
+    print("\nPreprocessing and validating features...")
+    valid_features = []
+    valid_labels = []
     
-    # Enhanced SGD classifier with stronger parameters
+    expected_dim = params.expected_features
+    print(f"Expected feature dimension: {expected_dim}")
+    
+    for window_size in params.sizes_array:
+        features = training_examples[window_size]
+        labels = train_labels[window_size]
+        
+        # Verify feature dimensions
+        valid_indices = []
+        for i, feat in enumerate(features):
+            if feat is not None and len(feat) == expected_dim:
+                valid_indices.append(i)
+                
+        if valid_indices:
+            valid_features.extend(features[valid_indices])
+            valid_labels.extend(labels[valid_indices])
+            
+        print(f"Window {window_size}: {len(valid_indices)} valid examples of {len(features)} total")
+    
+    if len(valid_features) == 0:
+        raise ValueError(f"No valid features found! Expected dimension: {expected_dim}")
+    
+    print(f"\nTotal valid examples: {len(valid_features)}")
+    
+    # Convert to numpy arrays
+    valid_features = np.array(valid_features)
+    valid_labels = np.array(valid_labels)
+    
+    print(f"\nTotal valid examples: {len(valid_features)}")
+    print(f"Positive examples: {np.sum(valid_labels == 1)}")
+    print(f"Negative examples: {np.sum(valid_labels == 0)}")
+    
+    # Pre-compute class weights
+    pos_count = np.sum(valid_labels == 1)
+    neg_count = np.sum(valid_labels == 0)
+    total = len(valid_labels)
+    
+    # Calculate balanced weights
+    class_weight_dict = {
+        0: total / (2.0 * neg_count),
+        1: total / (2.0 * pos_count)
+    }
+    
+    # Initialize scaler
+    scaler = StandardScaler()
+    valid_features = scaler.fit_transform(valid_features)
+    
+    # Initialize classifier without 'balanced' class_weight
     svm = SGDClassifier(
         loss='hinge',
-        max_iter=10000,  # Increased iterations
-        tol=1e-9,       # Tighter tolerance
-        alpha=0.00001,   # Reduced regularization
-        learning_rate='adaptive',
-        eta0=0.1,       # Higher initial learning rate
-        power_t=0.2,    # Slower learning rate decay
-        class_weight=class_weight_dict,
+        max_iter=20000,        # More iterations
+        tol=1e-10,            # Tighter tolerance
+        alpha=0.000001,       # Less regularization
+        learning_rate='optimal',
+        eta0=0.1,
+        power_t=0.1,          # Slower learning rate decay
+        class_weight=class_weight_dict,  # Using pre-computed weights
         random_state=42,
         warm_start=True,
-        average=10      # Use averaged SGD with more iterations
+        average=True          # Use averaged SGD
     )
     
-    scaler = StandardScaler(with_mean=True, with_std=True)
-    
-    # Increased batch size for better stability
-    batch_size = 4000  # Doubled from previous
-    
-    # Process and validate all features first
-    print("\nPreprocessing and validating features...")
-    valid_features_dict = {}
-    valid_labels_dict = {}
-    
-    for window_size in params.sizes_array:
-        pos_features = training_examples[window_size][:params.number_positive_examples]
-        neg_features = training_examples[window_size][-params.number_negative_examples:]
-        
-        # Validate and collect features
-        valid_pos = [f for f in pos_features if len(f) == params.expected_features]
-        valid_neg = [f for f in neg_features if len(f) == params.expected_features]
-        
-        valid_features_dict[window_size] = np.vstack((valid_pos, valid_neg))
-        valid_labels_dict[window_size] = np.concatenate((
-            np.ones(len(valid_pos)),
-            np.zeros(len(valid_neg))
-        ))
-        
-        print(f"Window {window_size}: {len(valid_pos)} positive, {len(valid_neg)} negative")
-    
-    # Training loop with multiple epochs
-    n_epochs = 10  # Increased from 3
+    # Better training loop
+    batch_size = 2000        # Smaller batches
+    n_epochs = 15            # More epochs
     best_score = float('-inf')
+    patience = 3             # Early stopping patience
+    no_improve = 0
     
+    print("\nStarting training...")
     for epoch in range(n_epochs):
         print(f"\nEpoch {epoch + 1}/{n_epochs}")
         
-        # Shuffle window sizes for each epoch
-        window_sizes = list(params.sizes_array)
-        np.random.shuffle(window_sizes)
+        # Shuffle data
+        shuffle_idx = np.random.permutation(len(valid_features))
+        features_shuffled = valid_features[shuffle_idx]
+        labels_shuffled = valid_labels[shuffle_idx]
         
-        for window_size in window_sizes:
-            features = valid_features_dict[window_size]
-            labels = valid_labels_dict[window_size]
+        # Process in batches
+        for i in range(0, len(features_shuffled), batch_size):
+            batch_features = features_shuffled[i:i + batch_size]
+            batch_labels = labels_shuffled[i:i + batch_size]
             
-            # Shuffle data
-            shuffle_idx = np.random.permutation(len(features))
-            features = features[shuffle_idx]
-            labels = labels[shuffle_idx]
+            # Train on batch
+            svm.partial_fit(batch_features, batch_labels, classes=[0, 1])
             
-            # Process in batches
-            for i in range(0, len(features), batch_size):
-                batch_features = features[i:i + batch_size]
-                batch_labels = labels[i:i + batch_size]
-                
-                # Scale features
-                if i == 0 and epoch == 0:
-                    batch_features = scaler.fit_transform(batch_features)
-                else:
-                    batch_features = scaler.transform(batch_features)
-                
-                # Train on batch
-                svm.partial_fit(batch_features, batch_labels, classes=[0, 1])
-                
-                # Compute and print loss
-                score = svm.score(batch_features, batch_labels)
-                if score > best_score:
-                    best_score = score
-                    # Save best model
-                    with open(model_file, 'wb') as f:
-                        pickle.dump(svm, f)
-                    with open(scaler_file, 'wb') as f:
-                        pickle.dump(scaler, f)
-                
-                print(f"Batch score: {score:.4f} (best: {best_score:.4f})")
+            # Compute score
+            score = svm.score(batch_features, batch_labels)
+            if score > best_score:
+                best_score = score
+                # Save best model
+                with open(model_file, 'wb') as f:
+                    pickle.dump(svm, f)
+                with open(scaler_file, 'wb') as f:
+                    pickle.dump(scaler, f)
+            
+            print(f"Batch score: {score:.4f} (best: {best_score:.4f})")
     
     print(f"\nTraining completed. Best score: {best_score:.4f}")
     return svm, scaler

@@ -22,11 +22,12 @@ class FacialDetectorDexter:
         self.model = None
         self.scaler = None
         self.detector = None
-        # Initialize CNN classifier
+        # Initialize CNN classifier silently
+        self.has_cnn_model = False
         try:
             self.cnn_classifier = CNNFaceClassifier.load_latest_model()
-        except Exception as e:
-            print(f"Error loading CNN classifier: {e}")
+            self.has_cnn_model = True
+        except:
             self.cnn_classifier = None
 
     def load_classifier(self, model_file, scaler_file):
@@ -38,37 +39,24 @@ class FacialDetectorDexter:
         self.detector = SlidingWindowDetector(self.params, self.model, self.scaler)
 
     def _compute_hog_features(self, image):
-        """Compute HOG features with consistent parameters"""
-        # Convert to grayscale if needed
-        if len(image.shape) == 3:
-            gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            gray = image
-            
-        # First resize to fixed window size
-        resized = cv.resize(gray, (self.params.window_size, self.params.window_size))
-        
+        """Minimal HOG computation for speed"""
         try:
-            # Extract HOG features with fixed parameters
-            features = hog(resized, 
-                         pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
-                         cells_per_block=(self.params.cells_per_block, self.params.cells_per_block),
-                         orientations=self.params.orientations,
-                         block_norm='L2-Hys',
-                         transform_sqrt=True,
-                         feature_vector=True)
+            # Quick resize and convert
+            gray = cv.resize(image if len(image.shape) == 2 
+                            else cv.cvtColor(image, cv.COLOR_BGR2GRAY), 
+                            (self.params.window_size, self.params.window_size))
             
-            expected_dim = self.params.expected_features
-            if len(features) != expected_dim:
-                print(f"Warning: Got {len(features)} features, expected {expected_dim}")
-                print("HOG params:", {
-                    'window': resized.shape,
-                    'pixels_per_cell': (self.params.dim_hog_cell, self.params.dim_hog_cell),
-                    'cells_per_block': (self.params.cells_per_block, self.params.cells_per_block),
-                    'orientations': self.params.orientations
-                })
-                return None
-                
+            # Basic HOG with minimal parameters
+            features = hog(
+                gray,
+                orientations=self.params.orientations,
+                pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
+                cells_per_block=(self.params.cells_per_block, self.params.cells_per_block),
+                block_norm=self.params.block_norm,
+                transform_sqrt=False,
+                feature_vector=True
+            )
+            
             return features
             
         except Exception as e:
@@ -585,39 +573,8 @@ class FacialDetectorDexter:
             print(f"Error in face classification: {e}")
             return "unknown", 0.0
         
-    # def show_current_image_results(self, image, detections, scores, ground_truth, image_name):
-    #     """Show results for current image with detections and ground truth"""
-    #     viz_img = image.copy()
-        
-    #     # Draw ground truth boxes in green
-    #     for gt_box in ground_truth:
-    #         x1, y1, x2, y2 = map(int, gt_box)
-    #         cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        
-    #     # Draw detections with scores in red
-    #     for det, score in zip(detections, scores):
-    #         x1, y1, x2, y2 = map(int, det)
-    #         cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-    #         cv.putText(viz_img, 
-    #                   f'score: {score:.2f}', 
-    #                   (x1, y1-5),
-    #                   cv.FONT_HERSHEY_SIMPLEX, 
-    #                   0.5, 
-    #                   (0, 0, 255), 
-    #                   2)
-        
-    #     # Show image
-    #     cv.imshow(f'Results for {image_name}', viz_img)
-    #     print('Apasă orice tastă pentru a continua...')
-    #     cv.waitKey(0)
-    #     cv.destroyAllWindows()
-        
-    #     # Save visualization
-    #     output_path = os.path.join(self.params.dir_save_files, f'detection_{image_name}')
-    #     cv.imwrite(output_path, viz_img)
-
     def show_current_image_results(self, image, detections, scores, ground_truth, image_name, save_only=False):
-        """Show results for current image with detections, classifications and ground truth"""
+        """Show results for current image with detections and ground truth"""
         viz_img = image.copy()
         
         # Draw ground truth boxes in green
@@ -625,52 +582,60 @@ class FacialDetectorDexter:
             x1, y1, x2, y2 = map(int, gt_box)
             cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         
-        # Draw detections with scores and classifications in red
+        # Draw detections with scores and classifications
         for det, det_score in zip(detections, scores):
             x1, y1, x2, y2 = map(int, det)
-            
-            # Get face classification
-            member, conf = self.classify_face(image, det)
             
             # Draw bounding box
             cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
             
-            # Draw detection score and classification
-            label = f"{member} ({conf:.2f})"
-            det_text = f"det: {det_score:.2f}"
-            
-            # Add text with background for better visibility
+            # Text settings
             font = cv.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5
             thickness = 2
+            padding = 5
+            
+            # Prepare detection text
+            if self.has_cnn_model:
+                # Get face classification
+                member, conf = self.classify_face(image, det)
+                score_text = f"Score: {det_score:.2f}"
+                class_text = f"{member}: {conf:.2f}"
+            else:
+                # Simple detection score when no CNN model
+                score_text = f"Score: {det_score:.2f}"
+                class_text = "No CNN Model"
             
             # Get text sizes
-            (label_w, label_h), _ = cv.getTextSize(label, font, font_scale, thickness)
-            (det_w, det_h), _ = cv.getTextSize(det_text, font, font_scale, thickness)
+            (score_w, score_h), _ = cv.getTextSize(score_text, font, font_scale, thickness)
+            (class_w, class_h), _ = cv.getTextSize(class_text, font, font_scale, thickness)
             
-            # Draw background rectangles
-            cv.rectangle(viz_img, 
-                        (x1, y1-label_h-8), 
-                        (x1+label_w+4, y1-4), 
+            # Calculate background rectangle positions
+            bg_x1 = x1
+            bg_y1 = y1 - (score_h + class_h + 3 * padding)
+            bg_x2 = max(x1 + score_w, x1 + class_w) + padding
+            bg_y2 = y1
+            
+            # Draw semi-transparent background
+            overlay = viz_img.copy()
+            cv.rectangle(overlay, 
+                        (bg_x1, bg_y1), 
+                        (bg_x2, bg_y2), 
                         (0, 0, 0), 
                         -1)
-            cv.rectangle(viz_img, 
-                        (x1, y1-label_h-det_h-12), 
-                        (x1+det_w+4, y1-label_h-8), 
-                        (0, 0, 0), 
-                        -1)
+            cv.addWeighted(overlay, 0.6, viz_img, 0.4, 0, viz_img)
             
-            # Draw text
+            # Draw texts
             cv.putText(viz_img, 
-                      label,
-                      (x1+2, y1-8),
+                      score_text,
+                      (x1 + padding, y1 - class_h - padding),
                       font,
                       font_scale,
                       (255, 255, 255),
                       thickness)
             cv.putText(viz_img, 
-                      det_text,
-                      (x1+2, y1-label_h-10),
+                      class_text,
+                      (x1 + padding, y1 - padding),
                       font,
                       font_scale,
                       (255, 255, 255),

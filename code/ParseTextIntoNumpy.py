@@ -1,105 +1,210 @@
 import os
 import numpy as np
+from tqdm import tqdm
 
 def create_task1_files(base_dir):
     """Create numpy files for task1 (general face detection)"""
-    # Create task1 directory
+    print("\n" + "="*80)
+    print("TASK 1: Processing General Face Detection Results")
+    print("="*80)
+    
+    # Create directory
     task1_dir = os.path.join(base_dir, 'task1')
     os.makedirs(task1_dir, exist_ok=True)
+    print(f"\nCreated/verified task1 directory: {task1_dir}")
     
-    # Read detection file
     detections_file = os.path.join(base_dir, 'task1gt_rezultate_detectie.txt')
     
     if not os.path.exists(detections_file):
         print(f"Detection file not found: {detections_file}")
         return
     
-    # Parse detections
-    detections = []  # [xmin, ymin, xmax, ymax]
-    file_names = []  # image filenames
+    print("\nParsing detections file...")
+    print("Looking for valid detections with format: <filename> <x1> <y1> <x2> <y2>")
+    
+    detections = []
+    file_names = []
+    invalid_lines = 0
+    skipped_lines = 0
     
     with open(detections_file, 'r') as f:
-        for line in f:
-            parts = line.strip().split()
+        lines = f.readlines()
+        for i, line in enumerate(tqdm(lines, desc="Processing detection lines")):
+            line = line.strip()
+            if not line:
+                skipped_lines += 1
+                continue
+                
+            parts = line.split()
             if len(parts) >= 5:
-                file_names.append(parts[0])
-                detections.append([int(x) for x in parts[1:5]])
+                try:
+                    coords = [int(x) for x in parts[1:5]]
+                    if all(c >= 0 for c in coords) and coords[2] > coords[0] and coords[3] > coords[1]:
+                        file_names.append(parts[0])
+                        detections.append(coords)
+                        if (len(detections) % 100) == 0:
+                            print(f"\nProcessed {len(detections)} valid detections so far...")
+                    else:
+                        print(f"\nWarning: Invalid coordinates in line {i+1}: {line}")
+                        invalid_lines += 1
+                except ValueError:
+                    print(f"\nError: Non-numeric coordinates in line {i+1}: {line}")
+                    invalid_lines += 1
+            else:
+                print(f"\nWarning: Incorrect format in line {i+1}: {line}")
+                invalid_lines += 1
     
-    # Convert to numpy arrays
-    detections_array = np.array(detections)
-    file_names_array = np.array(file_names)
-    scores_array = np.ones(len(detections))  # Default score of 1.0 for all detections
+    print("\nDetection Processing Summary:")
+    print(f"Total lines processed: {len(lines)}")
+    print(f"Valid detections found: {len(detections)}")
+    print(f"Invalid lines: {invalid_lines}")
+    print(f"Empty/skipped lines: {skipped_lines}")
+    
+    if not detections:
+        print("\nWARNING: No valid detections found!")
+        print("Creating placeholder data to avoid empty files...")
+        detections = [[0, 0, 100, 100]]
+        file_names = ["placeholder.jpg"]
+    
+    print("\nConverting to numpy arrays...")
+    detections_array = np.array(detections, dtype=np.int32)
+    file_names_array = np.array(file_names, dtype=str)
+    scores_array = np.ones(len(detections), dtype=np.float32)
+    
+    print("\nSaving numpy arrays...")
+    print(f"Detections shape: {detections_array.shape}")
+    print(f"File names shape: {file_names_array.shape}")
+    print(f"Scores shape: {scores_array.shape}")
     
     # Save arrays
-    np.save(os.path.join(task1_dir, 'detections_all_faces.npy'), detections_array)
-    np.save(os.path.join(task1_dir, 'scores_all_faces.npy'), scores_array)
-    np.save(os.path.join(task1_dir, 'file_names_all_faces.npy'), file_names_array)
+    for name, array in [
+        ('detections_all_faces.npy', detections_array),
+        ('scores_all_faces.npy', scores_array),
+        ('file_names_all_faces.npy', file_names_array)
+    ]:
+        path = os.path.join(task1_dir, name)
+        np.save(path, array)
+        print(f"Saved: {path}")
     
-    print(f"\nTask 1 files created in {task1_dir}")
-    print(f"Total detections: {len(detections)}")
+    print("\nTask 1 Processing Complete!")
+    print("="*80)
 
 def create_task2_files(base_dir):
     """Create numpy files for task2 (character-specific detection)"""
-    # Create task2 directory
+    print("\n" + "="*80)
+    print("TASK 2: Processing Character-Specific Detections")
+    print("="*80)
+    
     task2_dir = os.path.join(base_dir, 'task2')
     os.makedirs(task2_dir, exist_ok=True)
+    print(f"\nCreated/verified task2 directory: {task2_dir}")
     
-    # Character colors
+    # Read task1 results
+    task1_detections_file = os.path.join(base_dir, 'task1gt_rezultate_detectie.txt')
+    if not os.path.exists(task1_detections_file):
+        print("Task 1 detection file not found. Please run task 1 first.")
+        return
+    
+    print("\nLoading CNN classifier...")
+    try:
+        from RunCNNFaceClassifier import CNNFaceClassifier
+        cnn_classifier = CNNFaceClassifier.load_latest_model()
+        print("CNN classifier loaded successfully!")
+    except Exception as e:
+        print(f"ERROR: Failed to load CNN classifier: {e}")
+        return
+    
+    # Initialize character data
     characters = ['dexter', 'deedee', 'mom', 'dad']
+    character_data = {char: {'detections': [], 'file_names': [], 'scores': []} for char in characters}
     
-    # Initialize dictionaries for each character
-    character_data = {char: {'detections': [], 'file_names': []} for char in characters}
-    
-    # Read CNN classifier results
-    detections_dir = os.path.join(base_dir, 'detections')
-    if not os.path.exists(detections_dir):
-        print(f"Detections directory not found: {detections_dir}")
-        return
-    
-    # Process final_* images that contain CNN classifications
-    final_images = [f for f in os.listdir(detections_dir) if f.startswith('final_')]
-    
-    if not final_images:
-        print("No processed images found. Please run CNN classifier first.")
-        return
-    
-    # Read detection file for bounding boxes
-    detections_file = os.path.join(base_dir, 'task1gt_rezultate_detectie.txt')
-    detections_dict = {}
-    
-    with open(detections_file, 'r') as f:
-        for line in f:
+    print("\nReading Task 1 detections...")
+    detections = []
+    file_names = []
+    with open(task1_detections_file, 'r') as f:
+        lines = f.readlines()
+        print(f"Found {len(lines)} detection lines to process")
+        
+        for line in tqdm(lines, desc="Reading detections"):
             parts = line.strip().split()
             if len(parts) >= 5:
                 img_name = parts[0]
-                bbox = [int(x) for x in parts[1:5]]
-                if img_name not in detections_dict:
-                    detections_dict[img_name] = []
-                detections_dict[img_name].append(bbox)
+                bbox = list(map(int, parts[1:5]))
+                detections.append(bbox)
+                file_names.append(img_name)
     
-    # For each character, create numpy arrays
+    print(f"\nProcessing {len(detections)} detections with CNN classifier...")
+    
+    images_base_dir = os.path.join(base_dir, '..', '..', 'validare', 'validare')
+    print(f"Image directory: {images_base_dir}")
+    
+    classification_stats = {char: 0 for char in characters}
+    errors = 0
+    
+    for i, (bbox, img_name) in enumerate(tqdm(zip(detections, file_names), total=len(detections), desc="Classifying faces")):
+        img_path = os.path.join(images_base_dir, img_name)
+        
+        try:
+            import cv2 as cv
+            image = cv.imread(img_path)
+            if image is None:
+                print(f"\nWarning: Could not load image: {img_path}")
+                continue
+            
+            x1, y1, x2, y2 = bbox
+            face_img = image[y1:y2, x1:x2]
+            face_img_rgb = cv.cvtColor(face_img, cv.COLOR_BGR2RGB)
+            
+            member, confidence, probabilities = cnn_classifier.predict(face_img_rgb)
+            
+            if member in characters and confidence > 0.5:
+                character_data[member]['detections'].append(bbox)
+                character_data[member]['file_names'].append(img_name)
+                character_data[member]['scores'].append(confidence)
+                classification_stats[member] += 1
+                
+                if confidence > 0.9:
+                    print(f"\nHigh confidence detection: {member} ({confidence:.3f}) in {img_name}")
+            
+        except Exception as e:
+            print(f"\nError processing {img_name}: {e}")
+            errors += 1
+    
+    print("\nClassification Summary:")
+    print("-"*40)
     for char in characters:
-        detections = []
-        file_names = []
-        scores = []
+        print(f"{char.capitalize()}: {classification_stats[char]} detections")
+    print(f"Errors encountered: {errors}")
+    
+    print("\nSaving character-specific results...")
+    for char in characters:
+        if not character_data[char]['detections']:
+            print(f"\nNo detections for {char}, adding placeholder...")
+            character_data[char]['detections'].append([0, 0, 100, 100])
+            character_data[char]['file_names'].append("placeholder.jpg")
+            character_data[char]['scores'].append(0.1)
         
-        # Process each image's detections
-        for img_name in detections_dict.keys():
-            if img_name in detections_dict:
-                for bbox in detections_dict[img_name]:
-                    # In a real scenario, we would look up the CNN classification
-                    # Here we're just using placeholder scores
-                    detections.append(bbox)
-                    file_names.append(img_name)
-                    scores.append(1.0)  # Placeholder score
+        # Convert and save arrays
+        detections = np.array(character_data[char]['detections'], dtype=np.int32)
+        file_names = np.array(character_data[char]['file_names'], dtype=str)
+        scores = np.array(character_data[char]['scores'], dtype=np.float32)
         
-        # Save arrays for this character
-        if detections:
-            np.save(os.path.join(task2_dir, f'detections_{char}.npy'), np.array(detections))
-            np.save(os.path.join(task2_dir, f'scores_{char}.npy'), np.array(scores))
-            np.save(os.path.join(task2_dir, f'file_names_{char}.npy'), np.array(file_names))
-            print(f"\n{char.capitalize()} files created:")
-            print(f"Total detections: {len(detections)}")
+        print(f"\nSaving {char.capitalize()} data:")
+        print(f"Detections shape: {detections.shape}")
+        print(f"Scores range: {scores.min():.3f} - {scores.max():.3f}")
+        
+        # Save arrays
+        for name, array in [
+            (f'detections_{char}.npy', detections),
+            (f'scores_{char}.npy', scores),
+            (f'file_names_{char}.npy', file_names)
+        ]:
+            path = os.path.join(task2_dir, name)
+            np.save(path, array)
+            print(f"Saved: {path}")
+    
+    print("\nTask 2 Processing Complete!")
+    print("="*80)
 
 def main():
     base_dir = os.path.join('..', 'antrenare', 'fisiere_salvate_algoritm')
