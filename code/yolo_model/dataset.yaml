@@ -1,0 +1,11 @@
+# YOLOv8 dataset configuration
+path: /home/matthewalgo/Projects/Uni/cava/Proiect2/CAVA-2024-TEMA2/code/yolo_model/dataset  # absolute path to dataset root dir
+train: images/train  # path relative to path
+val: images/val      # path relative to path
+nc: 5  # number of classes
+names: ['dad', 'deedee', 'dexter', 'mom', 'unknown']
+
+# Training settings
+epochs: 100
+batch_size: 16
+img_size: 640
