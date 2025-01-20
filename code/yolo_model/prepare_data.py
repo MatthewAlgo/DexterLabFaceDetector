@@ -1,12 +1,9 @@
 import os
 import shutil
 import logging
-from sklearn.model_selection import train_test_split
-from PIL import Image
+from collections import defaultdict
 import cv2
-import numpy as np
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def create_yolo_dirs():
@@ -21,85 +18,119 @@ def create_yolo_dirs():
         os.makedirs(d, exist_ok=True)
         logging.info(f"Created directory: {d}")
 
+def load_annotations(ann_file):
+    """Load annotations from toate_adnotarile.txt"""
+    annotations = defaultdict(list)
+    with open(ann_file, 'r') as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 6:  # filename x1 y1 x2 y2 class
+                img_name = parts[0]
+                bbox = list(map(int, parts[1:5]))
+                class_name = parts[5]
+                annotations[img_name].append((bbox, class_name))
+    return annotations
+
 def convert_to_yolo_format(bbox, img_width, img_height):
-    """Convert bbox to YOLO format"""
-    x_center = ((bbox[0] + bbox[2]) / 2) / img_width
-    y_center = ((bbox[1] + bbox[3]) / 2) / img_height
-    width = (bbox[2] - bbox[0]) / img_width
-    height = (bbox[3] - bbox[1]) / img_height
+    """Convert bbox to YOLO format: [x_center, y_center, width, height]"""
+    x1, y1, x2, y2 = bbox
+    x_center = ((x1 + x2) / 2) / img_width
+    y_center = ((y1 + y2) / 2) / img_height
+    width = (x2 - x1) / img_width
+    height = (y2 - y1) / img_height
     return [x_center, y_center, width, height]
 
 def process_dataset():
-    """Process and prepare dataset for YOLO"""
-    source_dir = '../../antrenare/train_cnn'  # Updated path
-    logging.info(f"Looking for dataset in: {os.path.abspath(source_dir)}")
+    """Process dataset using annotations"""
+    source_dir = '../../antrenare'
+    ann_file = os.path.join(source_dir, 'toate_adnotarile.txt')
     
-    if not os.path.exists(source_dir):
-        # Try alternative path
-        source_dir = '../../antrenare/train_cnn'
-        logging.info(f"Trying alternative path: {os.path.abspath(source_dir)}")
-        
-        if not os.path.exists(source_dir):
-            raise FileNotFoundError(f"Source directory not found in either location")
+    if not os.path.exists(ann_file):
+        raise FileNotFoundError(f"Annotations file not found: {ann_file}")
     
-    # Create clean dataset structure
+    # Load annotations
+    annotations = load_annotations(ann_file)
+    logging.info(f"Loaded annotations for {len(annotations)} images")
+    
+    # Clear and create directories
     for split in ['train', 'val']:
         for subdir in ['images', 'labels']:
             dir_path = f'dataset/{subdir}/{split}'
             if os.path.exists(dir_path):
                 shutil.rmtree(dir_path)
             os.makedirs(dir_path)
-            
-    classes = ['dad', 'deedee', 'dexter', 'mom', 'unknown']
     
-    # Process each class
-    for class_name in classes:
-        class_path = os.path.join(source_dir, class_name)
-        if not os.path.exists(class_path):
-            logging.error(f"Class directory not found: {class_path}")
+    # Define classes
+    classes = ['dad', 'deedee', 'dexter', 'mom', 'unknown']
+    class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
+    
+    # Process each class folder
+    processed_count = 0
+    for class_name in ['dad', 'deedee', 'dexter', 'mom']:
+        class_dir = os.path.join(source_dir, class_name)
+        if not os.path.exists(class_dir):
+            logging.error(f"Class directory not found: {class_dir}")
             continue
-            
-        logging.info(f"Processing class: {class_name}")
         
-        # Get all images for this class
-        images = [f for f in os.listdir(class_path) 
-                 if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+        # Get all images
+        images = sorted([f for f in os.listdir(class_dir) 
+                        if f.endswith(('.jpg', '.jpeg', '.png'))])
         
-        if not images:
-            logging.warning(f"No images found for class: {class_name}")
-            continue
-            
-        # Split into train/val
-        num_val = max(1, int(len(images) * 0.2))
-        val_images = images[:num_val]
-        train_images = images[num_val:]
+        # Split into train/val (80/20)
+        split_idx = int(len(images) * 0.8)
+        train_images = images[:split_idx]
+        val_images = images[split_idx:]
         
-        # Process train and val sets
-        for img_name in train_images:
-            src_path = os.path.join(class_path, img_name)
-            dst_path = os.path.join('dataset/images/train', img_name)
-            shutil.copy2(src_path, dst_path)
-            
-            # Create label file
-            label_name = os.path.splitext(img_name)[0] + '.txt'
-            with open(os.path.join('dataset/labels/train', label_name), 'w') as f:
-                f.write(f"{classes.index(class_name)} 0.5 0.5 1.0 1.0\n")
+        # Process each split
+        for split, img_list in [('train', train_images), ('val', val_images)]:
+            for img_name in img_list:
+                # Construct source and destination paths
+                src_path = os.path.join(class_dir, img_name)
+                ann_key = f"{img_name.split('.')[0]}_{class_name}.jpg"
                 
-        for img_name in val_images:
-            src_path = os.path.join(class_path, img_name)
-            dst_path = os.path.join('dataset/images/val', img_name)
-            shutil.copy2(src_path, dst_path)
-            
-            # Create label file
-            label_name = os.path.splitext(img_name)[0] + '.txt'
-            with open(os.path.join('dataset/labels/val', label_name), 'w') as f:
-                f.write(f"{classes.index(class_name)} 0.5 0.5 1.0 1.0\n")
+                if ann_key not in annotations:
+                    logging.warning(f"No annotations found for {ann_key}")
+                    continue
                 
-        logging.info(f"Processed {len(train_images)} training and {len(val_images)} validation images for {class_name}")
+                # Copy image
+                dst_img_path = os.path.join(f'dataset/images/{split}', img_name)
+                shutil.copy2(src_path, dst_img_path)
+                
+                # Get image dimensions
+                img = cv2.imread(src_path)
+                if img is None:
+                    logging.error(f"Could not read image: {src_path}")
+                    continue
+                height, width = img.shape[:2]
+                
+                # Create YOLO format labels
+                label_name = os.path.splitext(img_name)[0] + '.txt'
+                label_path = os.path.join(f'dataset/labels/{split}', label_name)
+                
+                with open(label_path, 'w') as f:
+                    for bbox, cls_name in annotations[ann_key]:
+                        if cls_name in class_to_idx:
+                            yolo_bbox = convert_to_yolo_format(bbox, width, height)
+                            cls_idx = class_to_idx[cls_name]
+                            f.write(f"{cls_idx} {' '.join(map(str, yolo_bbox))}\n")
+                
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logging.info(f"Processed {processed_count} images...")
+    
+    # Process classes including unknown
+    for ann_key, annotations_list in annotations.items():
+        for bbox, cls_name in annotations_list:
+            if cls_name in class_to_idx:  # Will now match 'unknown' as well
+                # Process annotation normally
+                yolo_bbox = convert_to_yolo_format(bbox, width, height)
+                cls_idx = class_to_idx[cls_name]
+                f.write(f"{cls_idx} {' '.join(map(str, yolo_bbox))}\n")
+    
+    logging.info(f"Dataset preparation completed! Processed {processed_count} images total")
 
 if __name__ == '__main__':
     try:
-        create_yolo_dirs()
         process_dataset()
     except Exception as e:
         logging.error(f"Dataset preparation failed: {e}")
