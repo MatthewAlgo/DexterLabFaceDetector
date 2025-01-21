@@ -1,3 +1,150 @@
+# Facial Detection and Recognition - Dexter's Laboratory 
+
+## System Requirements
+
+### Python Environment
+- Python 3.8 or higher
+- Virtual environment recommended
+
+### Core Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### Required Libraries
+- OpenCV (cv2) >= 4.5.0
+- NumPy >= 1.19.0
+- PyTorch >= 2.0.0
+- Torchvision >= 0.15.0
+- scikit-image >= 0.19.0
+- scikit-learn >= 1.0.0
+- Pillow >= 9.0.0
+- matplotlib >= 3.5.0
+- tqdm >= 4.65.0
+- ultralytics >= 8.0.0 (for YOLO)
+
+### Optional Dependencies
+- CUDA Toolkit >= 11.0 (for GPU acceleration)
+- cuDNN >= 8.0 (for GPU acceleration)
+
+## Project Structure
+```
+CAVA-2024-TEMA2/
+├── antrenare/
+│   ├── dexter/
+│   ├── deedee/
+│   ├── mom/
+│   ├── dad/
+│   ├── train_cnn/
+│   └── fisiere_salvate_algoritm/
+├── validare/
+│   └── validare/
+└── code/
+    ├── Parameters.py
+    ├── FacialDetectorDexter.py
+    ├── SlidingWindowDetector.py
+    ├── RunProject.py
+    ├── TrainSVMModel.py
+    ├── TrainCNNFaceClassifier.py
+    └── RunClassifierOnData.py
+```
+
+## Quick Start
+
+1. Create virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate  # Windows
+```
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+3. Run the project:
+```bash
+cd code
+python RunProject.py
+```
+
+## Features
+
+### 1. Face Detection (SVM + HOG)
+- Sliding window approach
+- HOG feature extraction
+- SVM classifier
+- Non-maximum suppression
+
+### 2. Face Recognition (CNN)
+- Custom CNN architecture
+- Data augmentation
+- Character classification
+- Confidence scoring
+
+### 3. Performance Optimizations
+- Parallel processing
+- GPU acceleration (when available)
+- Efficient memory management
+- Adaptive window scaling
+
+### 4. Visualization
+- Real-time detection display
+- Confidence scores
+- Character classification
+- Training progress plots
+
+## Model Training
+
+### SVM Training
+```python
+# Option 1 in the menu
+# Trains HOG+SVM detector
+```
+
+### CNN Training
+```python
+# Option 3 in the menu
+# Trains CNN classifier
+```
+
+## Additional Notes
+
+### GPU Support
+- Models automatically use CUDA if available
+- Falls back to CPU if no GPU detected
+
+### Memory Management
+- Batch processing for large datasets
+- Efficient descriptor caching
+- Adaptive window sampling
+
+### Performance Tips
+1. Enable GPU support when possible
+2. Adjust chunk_size in Parameters.py for memory constraints
+3. Modify window_sizes array for speed/accuracy tradeoff
+
+## Troubleshooting
+
+### Common Issues
+1. CUDA out of memory
+   - Reduce batch sizes
+   - Decrease number of windows
+2. Slow processing
+   - Enable GPU support
+   - Adjust stride parameters
+   - Reduce window count
+
+### Error Codes
+- Check logs in fisiere_salvate_algoritm/
+- Verify input image dimensions
+- Ensure correct data organization
+
+## License
+Academic use only. See project documentation for details.
+```
+
 # Facial Detection and Recognition System - Dexter's Laboratory
 
 ## Project Description
