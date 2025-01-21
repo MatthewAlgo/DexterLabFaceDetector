@@ -8,129 +8,99 @@ from Parameters import Parameters
 from skimage.feature import hog
 import cv2 as cv
 
-def compute_expected_features_length(window_size, cell_size=8):
-    """Calculate expected HOG feature dimension for a given window size"""
-    cells_per_block = 2
-    block_stride = 1
-    orientations = 9
+def calculate_hog_feature_dimension(window_size, cell_size=8):
+    num_cells_per_block = 2
+    block_shift = 1
+    num_orientation_bins = 9
+    cells_count_in_window = window_size // cell_size
+    num_blocks_in_window = cells_count_in_window - (num_cells_per_block - block_shift)
     
-    cells_in_window = window_size // cell_size
-    blocks_in_window = cells_in_window - (cells_per_block - block_stride)
+    features_in_block = num_cells_per_block * num_cells_per_block * num_orientation_bins
+    block_feature_count = num_blocks_in_window * num_blocks_in_window * features_in_block
     
-    features_per_block = cells_per_block * cells_per_block * orientations
-    total_features = blocks_in_window * blocks_in_window * features_per_block
-    
-    return total_features
+    return block_feature_count
 
 def train_unified_model(params: Parameters, training_examples, train_labels):
-    """Enhanced training with better feature validation"""
+    # Train a unified model with all window sizes
     print("\nTraining unified model...")
-    
     model_file = os.path.join(params.dir_save_files, 'unified_svm_model.pkl')
     scaler_file = os.path.join(params.dir_save_files, 'unified_scaler.pkl')
     
-    # Better feature validation
     print("\nPreprocessing and validating features...")
-    valid_features = []
-    valid_labels = []
+    processed_features = []
+    filtered_labels = []
     
-    expected_dim = params.expected_features
-    print(f"Expected feature dimension: {expected_dim}")
-    
+    expected_feature_dimension = params.computed_feature_count
+    print(f"Expected feature dimension: {expected_feature_dimension}")
     for window_size in params.sizes_array:
         features = training_examples[window_size]
         labels = train_labels[window_size]
         
-        # Verify feature dimensions
-        valid_indices = []
+        valid_feature_indices = []
         for i, feat in enumerate(features):
-            if feat is not None and len(feat) == expected_dim:
-                valid_indices.append(i)
+            if feat is not None and len(feat) == expected_feature_dimension:
+                valid_feature_indices.append(i)
                 
-        if valid_indices:
-            valid_features.extend(features[valid_indices])
-            valid_labels.extend(labels[valid_indices])
+        if valid_feature_indices:
+            processed_features.extend(features[valid_feature_indices])
+            filtered_labels.extend(labels[valid_feature_indices])
             
-        print(f"Window {window_size}: {len(valid_indices)} valid examples of {len(features)} total")
+        print(f"Window {window_size}: {len(valid_feature_indices)} valid examples of {len(features)} total")
     
-    if len(valid_features) == 0:
-        raise ValueError(f"No valid features found! Expected dimension: {expected_dim}")
+    if len(processed_features) == 0:
+        raise ValueError(f"No valid features found! Expected dimension: {expected_feature_dimension}")
     
-    print(f"\nTotal valid examples: {len(valid_features)}")
+    print(f"\nTotal valid examples: {len(processed_features)}")
     
-    # Convert to numpy arrays
-    valid_features = np.array(valid_features)
-    valid_labels = np.array(valid_labels)
+    # Convert to numpy
+    processed_features = np.array(processed_features)
+    filtered_labels = np.array(filtered_labels)
+    print(f"\nTotal valid examples: {len(processed_features)}")
+    print(f"Positive examples: {np.sum(filtered_labels == 1)}")
+    print(f"Negative examples: {np.sum(filtered_labels == 0)}")
+    positive_example_count = np.sum(filtered_labels == 1)
+    negative_example_count = np.sum(filtered_labels == 0)
+    total_example_count = len(filtered_labels)
     
-    print(f"\nTotal valid examples: {len(valid_features)}")
-    print(f"Positive examples: {np.sum(valid_labels == 1)}")
-    print(f"Negative examples: {np.sum(valid_labels == 0)}")
+    # Balance class weights
+    class_balance_weights = { 0: total_example_count / (2.0 * negative_example_count), 1: total_example_count / (2.0 * positive_example_count)}
     
-    # Pre-compute class weights
-    pos_count = np.sum(valid_labels == 1)
-    neg_count = np.sum(valid_labels == 0)
-    total = len(valid_labels)
+    # Scale features for normalization
+    feature_normalizer = StandardScaler()
+    processed_features = feature_normalizer.fit_transform(processed_features)
     
-    # Calculate balanced weights
-    class_weight_dict = {
-        0: total / (2.0 * neg_count),
-        1: total / (2.0 * pos_count)
-    }
+    svm_model_instance = SGDClassifier( loss='hinge', max_iter=20000, tol=1e-10, alpha=0.000001, learning_rate='optimal',
+        eta0=0.1, power_t=0.1, class_weight=class_balance_weights, random_state=42, warm_start=True, average=True)
     
-    # Initialize scaler
-    scaler = StandardScaler()
-    valid_features = scaler.fit_transform(valid_features)
-    
-    # Initialize classifier without 'balanced' class_weight
-    svm = SGDClassifier(
-        loss='hinge',
-        max_iter=20000,        # More iterations
-        tol=1e-10,            # Tighter tolerance
-        alpha=0.000001,       # Less regularization
-        learning_rate='optimal',
-        eta0=0.1,
-        power_t=0.1,          # Slower learning rate decay
-        class_weight=class_weight_dict,  # Using pre-computed weights
-        random_state=42,
-        warm_start=True,
-        average=True          # Use averaged SGD
-    )
-    
-    # Better training loop
-    batch_size = 2000        # Smaller batches
-    n_epochs = 15            # More epochs
-    best_score = float('-inf')
-    patience = 3             # Early stopping patience
-    no_improve = 0
+    training_batch_size = 2000        # Smaller batches
+    num_training_epochs = 15            # More epochs
+    highest_training_score = float('-inf')
     
     print("\nStarting training...")
-    for epoch in range(n_epochs):
-        print(f"\nEpoch {epoch + 1}/{n_epochs}")
+    for epoch in range(num_training_epochs):
+        print(f"\nEpoch {epoch + 1}/{num_training_epochs}")
         
         # Shuffle data
-        shuffle_idx = np.random.permutation(len(valid_features))
-        features_shuffled = valid_features[shuffle_idx]
-        labels_shuffled = valid_labels[shuffle_idx]
-        
-        # Process in batches
-        for i in range(0, len(features_shuffled), batch_size):
-            batch_features = features_shuffled[i:i + batch_size]
-            batch_labels = labels_shuffled[i:i + batch_size]
+        shuffled_indices = np.random.permutation(len(processed_features))
+        shuffled_training_features = processed_features[shuffled_indices]
+        shuffled_training_labels = filtered_labels[shuffled_indices]
+        for i in range(0, len(shuffled_training_features), training_batch_size):
+            batch_features = shuffled_training_features[i:i + training_batch_size]
+            batch_labels = shuffled_training_labels[i:i + training_batch_size]
             
             # Train on batch
-            svm.partial_fit(batch_features, batch_labels, classes=[0, 1])
-            
+            svm_model_instance.partial_fit(batch_features, batch_labels, classes=[0, 1])
             # Compute score
-            score = svm.score(batch_features, batch_labels)
-            if score > best_score:
-                best_score = score
-                # Save best model
+            score = svm_model_instance.score(batch_features, batch_labels)
+            if score > highest_training_score:
+                highest_training_score = score
+                # Save best
                 with open(model_file, 'wb') as f:
-                    pickle.dump(svm, f)
+                    pickle.dump(svm_model_instance, f)
                 with open(scaler_file, 'wb') as f:
-                    pickle.dump(scaler, f)
+                    pickle.dump(feature_normalizer, f)
             
-            print(f"Batch score: {score:.4f} (best: {best_score:.4f})")
+            print(f"Batch score: {score:.4f} (best: {highest_training_score:.4f})")
     
-    print(f"\nTraining completed. Best score: {best_score:.4f}")
-    return svm, scaler
+    print(f"\nTraining completed. Best score: {highest_training_score:.4f}")
+    return svm_model_instance, feature_normalizer

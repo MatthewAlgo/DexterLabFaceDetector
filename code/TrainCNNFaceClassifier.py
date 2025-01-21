@@ -7,11 +7,10 @@ from torchvision import transforms, datasets
 from torch.utils.data import DataLoader, random_split
 import matplotlib.pyplot as plt
 
-# Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
-# Create save directory if it doesn't exist
+# Create save directory
 save_dir = os.path.join('../antrenare', 'fisiere_salvate_algoritm')
 os.makedirs(save_dir, exist_ok=True)
 
@@ -33,7 +32,6 @@ val_transforms = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# Modified CNN for 5 classes
 class ClasificatorCNN(nn.Module):
     def __init__(self, num_classes=5):  # Modified for 5 classes
         super(ClasificatorCNN, self).__init__()
@@ -84,7 +82,6 @@ class ClasificatorCNN(nn.Module):
         return x
 
 def save_model(model, epoch, accuracy, save_dir):
-    """Save model with proper metadata"""
     os.makedirs(save_dir, exist_ok=True)
     model_name = f'model_cnn_faces_trained_epoch_{epoch}_acc_{accuracy:.4f}.pth'
     model_path = os.path.join(save_dir, model_name)
@@ -115,7 +112,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epo
         epoch_loss = running_loss / len(train_loader.dataset)
         train_losses.append(epoch_loss)
         
-        # Validation phase
+        # Validation 
         model.eval()
         correct = 0
         total = 0
@@ -134,7 +131,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epo
         print(f'Training Loss: {epoch_loss:.4f}')
         print(f'Validation Accuracy: {accuracy:.4f}')
         
-        # Save model with descriptive name if it's the best so far
+        # Save best model
         if accuracy > best_accuracy:
             best_accuracy = accuracy
             best_weights = model.state_dict()
@@ -142,7 +139,6 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epo
             save_model(model, best_epoch, accuracy, save_dir)
             print(f'New best model saved! Accuracy: {best_accuracy:.4f}')
     
-    # Load best model
     if best_weights:
         model.load_state_dict(best_weights)
     
@@ -172,25 +168,18 @@ def main():
         root='../antrenare/fisiere_salvate_algoritm/train_cnn',
         transform=train_transforms
     )
-    
-    # Split dataset
+    # Split 
     train_size = int(0.8 * len(full_dataset))
     val_size = len(full_dataset) - train_size
     train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-    
-    # Override validation transform
     val_dataset.dataset.transform = val_transforms
-    
-    # Create data loaders
+
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
     valid_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=4)
-    
-    # Initialize model, loss function, and optimizer
     model = ClasificatorCNN(num_classes=len(full_dataset.classes))
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # Train model
     trained_model, best_epoch, best_accuracy = train_model(model, train_loader, valid_loader, criterion, optimizer)
     
     print(f"Training complete! Best model saved at epoch {best_epoch} with accuracy {best_accuracy:.4f}")

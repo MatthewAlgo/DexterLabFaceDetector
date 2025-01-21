@@ -15,33 +15,32 @@ def train_model():
     print(f"Numar total maxim exemple pozitive: {params.number_positive_examples * len(params.sizes_array)}")
     print(f"Numar total maxim exemple negative: {params.number_negative_examples * len(params.sizes_array)}")
     print(f"Total exemple de antrenare maxim: {(params.number_positive_examples + params.number_negative_examples) * len(params.sizes_array)}\n")
-    
-    # Check/generate descriptors
-    print("Verificăm descriptorii...")
-    all_files_exist = True
+    # Gen descriptors
+    print("Verificam descriptorii...")
+    descriptor_files_exist = True
     descriptor_files = []
     
     for window_size in params.sizes_array:
-        pos_file = os.path.join(params.dir_save_files, 
-                               f'descriptoriExemplePozitive_{params.dim_hog_cell}_'
+        positive_descriptor_file = os.path.join(params.dir_save_files, 
+                               f'descriptoriExemplePozitive_{params.hog_cell_dimension}_'
                                f'{params.number_positive_examples}_size_{window_size}.npy')
-        neg_file = os.path.join(params.dir_save_files,
-                               f'descriptoriExempleNegative_{params.dim_hog_cell}_'
+        negative_descriptor_file = os.path.join(params.dir_save_files,
+                               f'descriptoriExempleNegative_{params.hog_cell_dimension}_'
                                f'{params.number_negative_examples}_size_{window_size}.npy')
-        descriptor_files.append((window_size, pos_file, neg_file))
-        if not (os.path.exists(pos_file) and os.path.exists(neg_file)):
-            all_files_exist = False
+        descriptor_files.append((window_size, positive_descriptor_file, negative_descriptor_file))
+        if not (os.path.exists(positive_descriptor_file) and os.path.exists(negative_descriptor_file)):
+            descriptor_files_exist = False
             break
     
     # Load or generate descriptors
     positive_features_dict = {}
     negative_features_dict = {}
     
-    if all_files_exist:
+    if descriptor_files_exist:
         print("Loading existing descriptors...")
-        for window_size, pos_file, neg_file in descriptor_files:
-            positive_features_dict[window_size] = np.load(pos_file)
-            negative_features_dict[window_size] = np.load(neg_file)
+        for window_size, positive_descriptor_file, negative_descriptor_file in descriptor_files:
+            positive_features_dict[window_size] = np.load(positive_descriptor_file)
+            negative_features_dict[window_size] = np.load(negative_descriptor_file)
             print(f'Loaded descriptors for window size {window_size}')
     else:
         print("Generating descriptors...")
@@ -55,14 +54,14 @@ def train_model():
     training_examples_dict = {}
     train_labels_dict = {}
     
-    actual_pos = 0
-    actual_neg = 0
+    actual_positive_count = 0
+    actual_negative_count = 0
     print("\nNumarul real de exemple procesate:")
     for window_size in params.sizes_array:
         pos_features = positive_features_dict[window_size]
         neg_features = negative_features_dict[window_size]
-        actual_pos += len(pos_features)
-        actual_neg += len(neg_features)
+        actual_positive_count += len(pos_features)
+        actual_negative_count += len(neg_features)
         print(f"Dimensiune {window_size}:")
         print(f"  Exemple pozitive: {len(pos_features)}")
         print(f"  Exemple negative: {len(neg_features)}")
@@ -75,11 +74,9 @@ def train_model():
         
         print(f"Window {window_size}: {len(training_examples_dict[window_size])} examples")
     
-    print(f"\nTotal exemple pozitive procesate: {actual_pos}")
-    print(f"Total exemple negative procesate: {actual_neg}")
-    print(f"Total general: {actual_pos + actual_neg}")
-    
-    # Train classifier
+    print(f"\nTotal exemple pozitive procesate: {actual_positive_count}")
+    print(f"Total exemple negative procesate: {actual_negative_count}")
+    print(f"Total general: {actual_positive_count + actual_negative_count}")
     print("\nTraining classifier...")
     facial_detector.train_classifier(training_examples_dict, train_labels_dict)
     

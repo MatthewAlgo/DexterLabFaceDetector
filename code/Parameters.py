@@ -15,11 +15,11 @@ class Parameters:
         else:
             print('directory {} exists '.format(self.dir_save_files))
         
-        self.dim_hog_cell = 9      
+        self.hog_cell_dimension = 9      
         self.cells_per_block = 3    
-        self.orientations = 10       
+        self.number_of_orientations = 10       
         self.block_stride = 1       
-        self.window_size = 64       
+        self.detection_window_size = 64       
         self.block_norm = 'L2-Hys' 
 
         self.number_positive_examples = 2000   
@@ -39,19 +39,19 @@ class Parameters:
         self.min_window = 64  
         self.max_window = 200   
         
-        cells_in_window = self.window_size // self.dim_hog_cell  
-        blocks_in_window = cells_in_window - self.cells_per_block + 1  
-        features_per_block = self.cells_per_block * self.cells_per_block * self.orientations  
-        self.expected_features = blocks_in_window * blocks_in_window * features_per_block  
+        cells_in_detection_window = self.detection_window_size // self.hog_cell_dimension  
+        total_blocks_in_window = cells_in_detection_window - self.cells_per_block + 1  
+        num_features_in_block = self.cells_per_block * self.cells_per_block * self.number_of_orientations  
+        self.computed_feature_count = total_blocks_in_window * total_blocks_in_window * num_features_in_block  
         
         print(f"HOG Configuration:")
-        print(f"Window size: {self.window_size}x{self.window_size}")
-        print(f"Cell size: {self.dim_hog_cell}x{self.dim_hog_cell}")
+        print(f"Window size: {self.detection_window_size}x{self.detection_window_size}")
+        print(f"Cell size: {self.hog_cell_dimension}x{self.hog_cell_dimension}")
         print(f"Block size: {self.cells_per_block}x{self.cells_per_block} cells")
-        print(f"Expected features: {self.expected_features}")
+        print(f"Expected features: {self.computed_feature_count}")
         
-        print(f"Window size: {self.window_size}")
-        print(f"Cells in window: {cells_in_window}")
-        print(f"Blocks in window: {blocks_in_window}")
-        print(f"Features per block: {features_per_block}")
-        print(f"Expected total features: {self.expected_features}")
+        print(f"Window size: {self.detection_window_size}")
+        print(f"Cells in window: {cells_in_detection_window}")
+        print(f"Blocks in window: {total_blocks_in_window}")
+        print(f"Features per block: {num_features_in_block}")
+        print(f"Expected total features: {self.computed_feature_count}")

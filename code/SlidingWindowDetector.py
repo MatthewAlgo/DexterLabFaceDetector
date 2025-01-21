@@ -12,16 +12,15 @@ class SlidingWindowDetector:
         self.scaler = scaler
         self.feature_dim = scaler.n_features_in_
         
-        # Calculate HOG parameters without printing
         self.window_size = 64
         test_img = np.zeros((self.window_size, self.window_size))
         self.hog_params = self._get_matching_hog_params(test_img)
         
         # Generate window sizes silently
-        self.window_sizes = self._generate_window_sizes()
+        self.window_sizes = self.calculate_variable_window_dimensions()
 
     def _get_matching_hog_params(self, img):
-        """Fixed HOG parameters to match expected dimension of 1764"""
+        # Hog conf
         base_params = {
             'orientations': 9,
             'pixels_per_cell': (8, 8),  # Fixed at 8x8
@@ -29,129 +28,88 @@ class SlidingWindowDetector:
             'block_norm': 'L2-Hys',
             'transform_sqrt': True
         }
+        return base_params
         
-        features = hog(img, feature_vector=True, **base_params)
-        if len(features) == self.feature_dim:
-            return base_params
-            
-        # If base params don't match, try fixed alternative for 1764 features
-        # 1764 = (7 blocks * 7 blocks) * (2 cells * 2 cells) * 9 orientations
-        fixed_params = {
-            'orientations': 9,
-            'pixels_per_cell': (8, 8),
-            'cells_per_block': (2, 2),
-            'block_norm': 'L2-Hys',
-            'transform_sqrt': True
-        }
+    def calculate_variable_window_dimensions(self, min_size=60, max_size=300, num_base_sizes=15):
+        # Base with logarithmic spacing for small windows
+        scale_based_sizes = np.logspace(np.log10(min_size), np.log10(max_size), num_base_sizes, dtype=int)
+        resize_ratios = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.33, 1.5, 2.0]
         
-        return fixed_params
-
-        
-    def _generate_window_sizes(self, min_size=60, max_size=300, num_base_sizes=15):
-        """Generate window sizes with variable aspect ratios"""
-        # Generate base sizes using logarithmic spacing for better small-size coverage
-        base_sizes = np.logspace(np.log10(min_size), np.log10(max_size), num_base_sizes, dtype=int)
-        
-        # Generate aspect ratios (from 0.5 to 2.0)
-        aspect_ratios = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.33, 1.5, 2.0]
-        
-        # Generate combinations
         filtered_sizes = []
-        for base_size in base_sizes:
-            for ratio in aspect_ratios:
+        for base_size in scale_based_sizes:
+            for ratio in resize_ratios:
                 width = int(base_size * np.sqrt(ratio))
                 height = int(base_size / np.sqrt(ratio))
                 
-                # Ensure dimensions are within bounds
                 if min_size <= width <= max_size and min_size <= height <= max_size:
-                    # Avoid duplicate sizes
                     size_tuple = (width, height)
                     if size_tuple not in filtered_sizes:
                         filtered_sizes.append(size_tuple)
         
-        # Sort by area for better processing order
         filtered_sizes.sort(key=lambda x: x[0] * x[1])
         
-        # If we have more than 150 windows, sample them intelligently
+        # If more than 150 windows, sample 
         if len(filtered_sizes) > 150:
             # Keep more small windows and fewer large windows
             weights = [1.0 / (w * h) for w, h in filtered_sizes]
             weights = np.array(weights) / sum(weights)
-            indices = np.random.choice(
-                len(filtered_sizes), 
-                size=150, 
-                replace=False, 
-                p=weights
-            )
+            indices = np.random.choice(len(filtered_sizes), size=150, replace=False, p=weights)
             filtered_sizes = [filtered_sizes[i] for i in sorted(indices)]
         
         return filtered_sizes
         
-    def detect_faces(self, image):
-        """Faster sliding window detection with strict threshold"""
+    def find_faces_with_sliding_window(self, image):
         if len(image.shape) == 3:
             gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
         else:
-            gray = image
-            
-        all_detections = []
-        all_scores = []
+            gray = image    
+        detections_list = []
+        detection_scores = []
         
-        # Pre-compute integral images
-        integral_img = cv.integral(gray)
-        integral_sqr = cv.integral(np.float32(gray) ** 2)
-        
-        # Faster processing
-        for window_width, window_height in self.window_sizes[::2]:  # Skip every other size
-            # Much larger stride
+        # Pentru calcularea variantei
+        integral_image = cv.integral(gray)
+        integral_squared_image = cv.integral(np.float32(gray) ** 2)
+        for window_width, window_height in self.window_sizes[::2]: 
             stride_w = max(24, window_width // 6)
             stride_h = max(24, window_height // 6)
-            
-            # Quick variance check threshold
-            var_threshold = 50  # Lower threshold = skip more windows
+            # Lower threshold = skip more windows
+            var_threshold = 50  
             
             # Slide window
             for y in range(0, gray.shape[0] - window_height + 1, stride_h):
                 for x in range(0, gray.shape[1] - window_width + 1, stride_w):
                     # Varianta
-                    x2, y2 = x + window_width, y + window_height
+                    window_right_x, window_bottom_y = x + window_width, y + window_height
                     area = window_width * window_height
-                    sum_val = (integral_img[y2, x2] - integral_img[y2, x] - 
-                              integral_img[y, x2] + integral_img[y, x])
-                    sum_sqr = (integral_sqr[y2, x2] - integral_sqr[y2, x] - 
-                              integral_sqr[y, x2] + integral_sqr[y, x])
+                    sum_val = (integral_image[window_bottom_y, window_right_x] - integral_image[window_bottom_y, x] - 
+                              integral_image[y, window_right_x] + integral_image[y, x])
+                    sum_sqr = (integral_squared_image[window_bottom_y, window_right_x] - integral_squared_image[window_bottom_y, x] - 
+                              integral_squared_image[y, window_right_x] + integral_squared_image[y, x])
                     mean = sum_val / area
                     variance = (sum_sqr / area) - (mean ** 2)
                     if variance < var_threshold:
                         continue
                     
-                    window = gray[y:y2, x:x2]
+                    window = gray[y:window_bottom_y, x:window_right_x]
                     window_resized = cv.resize(window, (64, 64))
-                    
-                    # Get HOG features
-                    features = hog(window_resized,
-                                 pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
+                    hog_features = hog(window_resized,
+                                 pixels_per_cell=(self.params.hog_cell_dimension, self.params.hog_cell_dimension),
                                  cells_per_block=(self.params.cells_per_block, self.params.cells_per_block),
-                                 orientations=self.params.orientations,
+                                 orientations=self.params.number_of_orientations,
                                  feature_vector=True)
-                    
-                    # Verify feature dimension
-                    if len(features) != self.feature_dim:
+                    if len(hog_features) != self.feature_dim:
                         continue
                     
-                    # Scale features and predict
-                    features_scaled = self.scaler.transform([features])
+                    features_scaled = self.scaler.transform([hog_features])
                     score = self.model.decision_function(features_scaled)[0]
-                    
-                    # Score filtering
                     if score >= self.params.threshold:
-                        all_detections.append([x, y, x + window_width, y + window_height])
-                        all_scores.append(score)
+                        detections_list.append([x, y, x + window_width, y + window_height])
+                        detection_scores.append(score)
         
-        # Strict threshold check - only keep detections above 10000
-        if len(all_detections) > 0:
-            detections_array = np.array(all_detections)
-            scores_array = np.array(all_scores)
+        # Only keep detections above 10000
+        if len(detections_list) > 0:
+            detections_array = np.array(detections_list)
+            scores_array = np.array(detection_scores)
             high_score_mask = scores_array >= self.params.threshold
             return detections_array[high_score_mask], scores_array[high_score_mask]
         

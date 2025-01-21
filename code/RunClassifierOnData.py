@@ -6,346 +6,276 @@ from tqdm import tqdm
 import glob
 import torch
 
-def apply_nms(boxes, scores, iou_threshold=0.3):
-    """Apply Non-Maximum Suppression"""
-    if len(boxes) == 0:
+def perform_non_max_suppression(detection_boxes, detection_scores, iou_threshold=0.3):
+    # NMS implementation
+    if len(detection_boxes) == 0:
         return [], []
         
-    # Convert to float
-    boxes = np.array(boxes, dtype=np.float32)
-    scores = np.array(scores, dtype=np.float32)
-    
-    # Get coordinates
-    x1 = boxes[:, 0]
-    y1 = boxes[:, 1]
-    x2 = boxes[:, 2]
-    y2 = boxes[:, 3]
-    
-    # Calculate areas
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-    
-    # Sort by score
-    order = scores.argsort()[::-1]
+    detection_boxes = np.array(detection_boxes, dtype=np.float32)
+    detection_scores = np.array(detection_scores, dtype=np.float32)
+    box_top_left_x = detection_boxes[:, 0]
+    box_top_left_y = detection_boxes[:, 1]
+    box_bottom_right_x = detection_boxes[:, 2]
+    box_bottom_right_y = detection_boxes[:, 3]
+    # Areas
+    bounding_box_areas = (box_bottom_right_x - box_top_left_x + 1) * (box_bottom_right_y - box_top_left_y + 1)
+    order = detection_scores.argsort()[::-1]
     
     keep = []
     while order.size > 0:
         i = order[0]
         keep.append(i)
+        box_overlap_top_left_x = np.maximum(box_top_left_x[i], box_top_left_x[order[1:]])
+        overlap_top_left_y = np.maximum(box_top_left_y[i], box_top_left_y[order[1:]])
+        bottom_right_x_overlap = np.minimum(box_bottom_right_x[i], box_bottom_right_x[order[1:]])
+        overlap_bottom_right_y = np.minimum(box_bottom_right_y[i], box_bottom_right_y[order[1:]])
         
-        # Calculate IoU
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
+        width_overlap = np.maximum(0.0, bottom_right_x_overlap - box_overlap_top_left_x + 1)
+        height_overlap = np.maximum(0.0, overlap_bottom_right_y - overlap_top_left_y + 1)
+        intersection_area = width_overlap * height_overlap
         
-        w = np.maximum(0.0, xx2 - xx1 + 1)
-        h = np.maximum(0.0, yy2 - yy1 + 1)
-        inter = w * h
+        intersection_over_union = intersection_area / (bounding_box_areas[i] + bounding_box_areas[order[1:]] - intersection_area)
         
-        ovr = inter / (areas[i] + areas[order[1:]] - inter)
-        
-        inds = np.where(ovr <= iou_threshold)[0]
+        inds = np.where(intersection_over_union <= iou_threshold)[0]
         order = order[inds + 1]
     
-    return boxes[keep].astype(np.int32), scores[keep]
+    return detection_boxes[keep].astype(np.int32), detection_scores[keep]
 
-def process_image(args):
-    """Process a single image with the detector - silent version"""
-    image_path, model_file, scaler_file, params = args
+def detect_and_visualize_faces(input_arguments):
+    image_path, model_file, scaler_file, params = input_arguments
     
-    # Initialize detector silently
-    detector = FacialDetectorDexter(params)
-    detector.load_classifier(model_file, scaler_file)
-    
-    # Process image
+    facial_detector = FacialDetectorDexter(params)
+    facial_detector.load_classifier(model_file, scaler_file)
     image = cv.imread(image_path)
     image_name = os.path.basename(image_path)
-    detections, scores = detector.detector.detect_faces(image)
+    face_bounding_boxes, face_detection_scores = facial_detector.detector.find_faces_with_sliding_window(image)
     
-    # Don't try to load CNN classifier - just process detections
-    if len(detections) > 0:
-        detections, scores = apply_nms(detections, scores, iou_threshold=0.2)
+    # PROCESS DETECTIONS
+    if len(face_bounding_boxes) > 0:
+        face_bounding_boxes, face_detection_scores = perform_non_max_suppression(face_bounding_boxes, face_detection_scores, iou_threshold=0.2)
         
-        # Visualize and save only if detections remain after NMS
-        if len(detections) > 0:
-            viz_img = image.copy()
-            results = []
-            
-            for det, score in zip(detections, scores):
-                x1, y1, x2, y2 = map(int, det)
-                
-                # Just save detection without CNN classification
-                results.append(f"{image_name} {x1} {y1} {x2} {y2}")
-                
-                # Draw detection with score only
-                cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                
-                # Add score text with background
-                score_text = f"Score: {score:.2f}"
+        if len(face_bounding_boxes) > 0:
+            detection_visualization = image.copy()
+            face_detection_results = []
+            for det, score in zip(face_bounding_boxes, face_detection_scores):
+                face_rectangle_x1, top_left_y_coordinate, bottom_right_x, bottom_right_y_coordinate = map(int, det)
+                # Append to results
+                face_detection_results.append(f"{image_name} {face_rectangle_x1} {top_left_y_coordinate} {bottom_right_x} {bottom_right_y_coordinate}")
+                cv.rectangle(detection_visualization, (face_rectangle_x1, top_left_y_coordinate), (bottom_right_x, bottom_right_y_coordinate), (0, 0, 255), 2)
+                detection_score_text = f"Score: {score:.2f}"
                 font = cv.FONT_HERSHEY_SIMPLEX
                 font_scale = 0.5
                 thickness = 2
-                padding = 5
+                score_text_padding = 5
                 
-                (text_w, text_h), _ = cv.getTextSize(score_text, font, font_scale, thickness)
-                
-                # Draw text background
-                cv.rectangle(viz_img, 
-                           (x1, y1-text_h-2*padding), 
-                           (x1+text_w+padding, y1), 
-                           (0, 0, 0), 
-                           -1)
-                           
-                # Draw score text
-                cv.putText(viz_img, 
-                          score_text,
-                          (x1+padding//2, y1-padding),
-                          font,
-                          font_scale,
-                          (255, 255, 255),
-                          thickness)
+                (text_w, text_h), _ = cv.getTextSize(detection_score_text, font, font_scale, thickness)
+                cv.rectangle(detection_visualization, (face_rectangle_x1, top_left_y_coordinate-text_h-2*score_text_padding), (face_rectangle_x1+text_w+score_text_padding, top_left_y_coordinate), (0, 0, 0), -1)
+                # Score text
+                cv.putText(detection_visualization, detection_score_text,(face_rectangle_x1+score_text_padding//2, top_left_y_coordinate-score_text_padding), font, font_scale, (255, 255, 255), thickness)
             
             # Save visualization
-            output_path = os.path.join(params.dir_save_files, 'detections', f'boxes_{image_name}')
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            cv.imwrite(output_path, viz_img)
+            detection_output_path = os.path.join(params.dir_save_files, 'detections', f'boxes_{image_name}')
+            os.makedirs(os.path.dirname(detection_output_path), exist_ok=True)
+            cv.imwrite(detection_output_path, detection_visualization)
             
-            return results
+            return face_detection_results
     return []
 
 def process_detections_with_cnn(params):
-    """Process detections in smaller batches"""
-    # Read detection results
+    # Read task1 results
     results_file = os.path.join(params.dir_save_files, 'task1gt_rezultate_detectie.txt')
     with open(results_file, 'r') as f:
         detection_lines = f.readlines()
-    
-    # Initialize CNN classifier
     cnn_classifier = CNNFaceClassifier.load_latest_model()
     
-    # Group detections by image
     detections_by_image = {}
     for line in detection_lines:
-        parts = line.strip().split()
-        image_name = parts[0]
-        bbox = list(map(int, parts[1:]))
-        if image_name not in detections_by_image:
-            detections_by_image[image_name] = []
-        detections_by_image[image_name].append(bbox)
+        detection_parts = line.strip().split()
+        image_file_name = detection_parts[0]
+        face_bounding_box = list(map(int, detection_parts[1:]))
+        if image_file_name not in detections_by_image:
+            detections_by_image[image_file_name] = []
+        detections_by_image[image_file_name].append(face_bounding_box)
     
-    # Process each image's detections
-    for image_name, bboxes in tqdm(detections_by_image.items(), desc="Processing images"):
+    # Process each image detection
+    for image_file_name, face_bounding_boxes in tqdm(detections_by_image.items(), desc="Processing images"):
         # Load image once
-        image_path = os.path.join(params.dir_test_examples, image_name)
-        image = cv.imread(image_path)
+        input_image_path = os.path.join(params.dir_test_examples, image_file_name)
+        image = cv.imread(input_image_path)
         if image is None:
             continue
-            
-        # Load visualization image
-        viz_path = os.path.join(params.dir_save_files, 'detections', f'boxes_{image_name}')
-        if not os.path.exists(viz_path):
+        # Load vis image
+        # Skip if visualization not found
+        visualization_image_path = os.path.join(params.dir_save_files, 'detections', f'boxes_{image_file_name}')
+        if not os.path.exists(visualization_image_path):
             continue
-        viz_img = cv.imread(viz_path)
+        visualization_image = cv.imread(visualization_image_path)
         
-        # Process all detections for this image
-        results = []
-        for bbox in bboxes:
-            x1, y1, x2, y2 = bbox
-            face_img = image[y1:y2, x1:x2]
-            face_img_rgb = cv.cvtColor(face_img, cv.COLOR_BGR2RGB)
+        # Detections
+        classification_results = []
+        for face_bounding_box in face_bounding_boxes:
+            bounding_box_x1, bounding_box_top, bounding_box_x2, bounding_box_bottom = face_bounding_box
+            extracted_face_image = image[bounding_box_top:bounding_box_bottom, bounding_box_x1:bounding_box_x2]
+            face_img_rgb = cv.cvtColor(extracted_face_image, cv.COLOR_BGR2RGB)
             
             # Get classification
-            member, conf, _ = cnn_classifier.predict(face_img_rgb)
-            results.append((bbox, member, conf))
+            classified_member, classification_confidence, _ = cnn_classifier.predict(face_img_rgb)
+            classification_results.append((face_bounding_box, classified_member, classification_confidence))
         
-        # Update visualization with all classifications
-        for bbox, member, conf in results:
-            x1, y1, x2, y2 = bbox
+        # Update visualization
+        for face_bounding_box, classified_member, classification_confidence in classification_results:
+            bounding_box_x1, bounding_box_top, bounding_box_x2, bounding_box_bottom = face_bounding_box
             # Add classification text
-            label = f"{member} ({conf:.2f})"
+            label = f"{classified_member} ({classification_confidence:.2f})"
             font = cv.FONT_HERSHEY_SIMPLEX
             font_scale = 0.5
             thickness = 2
             
-            # Add text with background
             (label_w, label_h), _ = cv.getTextSize(label, font, font_scale, thickness)
-            cv.rectangle(viz_img, (x1, y1-label_h-8), (x1+label_w+4, y1-4), (0, 0, 0), -1)
-            cv.putText(viz_img, label, (x1+2, y1-8), font, font_scale, (255, 255, 255), thickness)
+            cv.rectangle(visualization_image, (bounding_box_x1, bounding_box_top-label_h-8), (bounding_box_x1+label_w+4, bounding_box_top-4), (0, 0, 0), -1)
+            cv.putText(visualization_image, label, (bounding_box_x1+2, bounding_box_top-8), font, font_scale, (255, 255, 255), thickness)
         
         # Save updated visualization
-        output_path = os.path.join(params.dir_save_files, 'detections', f'final_{image_name}')
-        cv.imwrite(output_path, viz_img)
+        output_path = os.path.join(params.dir_save_files, 'detections', f'final_{image_file_name}')
+        cv.imwrite(output_path, visualization_image)
         
         # Group results by character for task2
         char_results = {char: [] for char in ['dexter', 'deedee', 'mom', 'dad']}
-        for bbox, member, conf in results:
-            if member in char_results:
-                char_results[member].append((bbox, conf, image_name))
+        for face_bounding_box, classified_member, classification_confidence in classification_results:
+            if classified_member in char_results:
+                char_results[classified_member].append((face_bounding_box, classification_confidence, image_file_name))
 
 def process_detections_for_task2(params):
     """Process detections and create separate files for each character"""
     # Read detection results with CNN classifications
     detections_dir = os.path.join(params.dir_save_files, 'detections')
-    final_images = [f for f in os.listdir(detections_dir) if f.startswith('final_')]
+    processed_image_filenames = [f for f in os.listdir(detections_dir) if f.startswith('final_')]
     
-    # Dictionary to store character-specific detections
-    char_detections = {
+    character_detections = {
         'dexter': [], 'deedee': [], 'mom': [], 'dad': []
     }
     
-    # Process each final detection image
-    for img_name in final_images:
-        # Read the corresponding detection file line
-        base_name = img_name.replace('final_', '')
+    # Process each image
+    for final_image_name in processed_image_filenames:
+        image_name = final_image_name.replace('final_', '')
         
-        # Get detections for this image from the main results file
-        results_file = os.path.join(params.dir_save_files, 'task1gt_rezultate_detectie.txt')
-        if not os.path.exists(results_file):
+        detection_results_file = os.path.join(params.dir_save_files, 'task1gt_rezultate_detectie.txt')
+        if not os.path.exists(detection_results_file):
             continue
             
-        with open(results_file, 'r') as f:
+        with open(detection_results_file, 'r') as f:
             lines = f.readlines()
             for line in lines:
                 parts = line.strip().split()
                 if len(parts) < 5:
                     continue
-                    
-                if parts[0] == base_name:
-                    x1, y1, x2, y2 = map(int, parts[1:5])
+                if parts[0] == image_name:
+                    top_left_x, top_left_y, bottom_right_x, bottom_right_y = map(int, parts[1:5])
                     
                     # Determine character from the filename or image content
                     # For example, if the image contains "dexter_001.jpg"
-                    char_found = None
-                    for char in char_detections.keys():
-                        if char in base_name.lower():
-                            char_found = char
+                    detected_character = None
+                    for char in character_detections.keys():
+                        if char in image_name.lower():
+                            detected_character = char
                             break
-                    
-                    if char_found:
-                        char_detections[char_found].append(
-                            f"{base_name} {x1} {y1} {x2} {y2}"
-                        )
+                    if detected_character:
+                        character_detections[detected_character].append(f"{image_name} {top_left_x} {top_left_y} {bottom_right_x} {bottom_right_y}")
     
-    # Write non-empty detection files
-    for char in char_detections:
-        if char_detections[char]:  # Only write if we have detections
-            output_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
-            with open(output_file, 'w') as f:
-                for detection in char_detections[char]:
-                    f.write(f"{detection}\n")
+    # Write detection files
+    for char in character_detections:
+        if character_detections[char]:
+            detection_output_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
+            with open(detection_output_file, 'w') as f:
+                for character_detection in character_detections[char]:
+                    f.write(f"{character_detection}\n")
         else:
-            # Write at least one dummy detection to avoid empty file
-            output_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
-            with open(output_file, 'w') as f:
-                # Write a placeholder detection if no real detections found
+            # Write one dummy detection - no files
+            detection_output_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
+            with open(detection_output_file, 'w') as f:
                 f.write(f"placeholder_001.jpg 0 0 100 100\n")
     
-    return char_detections
+    return character_detections
 
 def evaluate_task2(params):
-    """Evaluate Task 2 results against ground truth"""
-    characters = ['dexter', 'deedee', 'mom', 'dad']
-    
-    for char in characters:
+    # Evaluate task 2 results
+    detection_characters = ['dexter', 'deedee', 'mom', 'dad']
+    for char in detection_characters:
         print(f"\nEvaluating {char.capitalize()} detections:")
-        
-        # Read ground truth
+        # Read GT
         gt_file = os.path.join(params.dir_test_examples, '..', f'task2_{char}_gt_validare.txt')
         if not os.path.exists(gt_file):
             print(f"Ground truth file not found: {gt_file}")
             continue
             
-        # Read results
-        results_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
-        if not os.path.exists(results_file):
-            print(f"Results file not found: {results_file}")
+        task2_character_results_file = os.path.join(params.dir_save_files, f'task2_{char}_rezultate.txt')
+        if not os.path.exists(task2_character_results_file):
+            print(f"Results file not found: {task2_character_results_file}")
             continue
-            
-        # Load both files
         try:
-            gt_data = np.loadtxt(gt_file, dtype=str)
-            results_data = np.loadtxt(results_file, dtype=str)
-            
-            # Convert to proper format if needed
-            if len(gt_data.shape) == 1:
-                gt_data = gt_data.reshape(1, -1)
-            if len(results_data.shape) == 1:
-                results_data = results_data.reshape(1, -1)
+            ground_truth_data = np.loadtxt(gt_file, dtype=str)
+            algorithm_detections = np.loadtxt(task2_character_results_file, dtype=str)
+            # Reshape
+            if len(ground_truth_data.shape) == 1:
+                ground_truth_data = ground_truth_data.reshape(1, -1)
+            if len(algorithm_detections.shape) == 1:
+                algorithm_detections = algorithm_detections.reshape(1, -1)
                 
-            # Calculate metrics
-            print(f"Ground truth detections: {len(gt_data)}")
-            print(f"Algorithm detections: {len(results_data)}")
-            
-            # Detailed evaluation could be added here
+            print(f"Ground truth detections: {len(ground_truth_data)}")
+            print(f"Algorithm detections: {len(algorithm_detections)}")
             
         except Exception as e:
             print(f"Error evaluating {char}: {e}")
 
 def run_classifier():
-    params = Parameters()
+    configuration = Parameters()
     
     # Get a detector to calculate window info upfront
-    temp_detector = FacialDetectorDexter(params)
-    temp_detector.load_classifier(
-        os.path.join(params.dir_save_files, 'unified_svm_model.pkl'),
-        os.path.join(params.dir_save_files, 'unified_scaler.pkl')
+    facial_detector = FacialDetectorDexter(configuration)
+    facial_detector.load_classifier(
+        os.path.join(configuration.dir_save_files, 'unified_svm_model.pkl'),
+        os.path.join(configuration.dir_save_files, 'unified_scaler.pkl')
     )
-    window_count = len(temp_detector.detector.window_sizes)
-    
-    # Print all initialization info at once
+    window_count = len(facial_detector.detector.window_sizes)
     print("\nInitialization Summary:")
     print(f"Number of window sizes: {window_count}")
     print("\nStarting detection...")
     
-    # Create detections directory
-    detections_dir = os.path.join(params.dir_save_files, 'detections')
+    # Create detections dir
+    detections_dir = os.path.join(configuration.dir_save_files, 'detections')
     os.makedirs(detections_dir, exist_ok=True)
-    
-    # Get model paths
-    model_file = os.path.join(params.dir_save_files, 'unified_svm_model.pkl')
-    scaler_file = os.path.join(params.dir_save_files, 'unified_scaler.pkl')
+    model_file = os.path.join(configuration.dir_save_files, 'unified_svm_model.pkl')
+    scaler_file = os.path.join(configuration.dir_save_files, 'unified_scaler.pkl')
     
     if not os.path.exists(model_file) or not os.path.exists(scaler_file):
         print("Please train the model first")
         return
     
-    # Get all test images
-    test_images = glob.glob(os.path.join(params.dir_test_examples, '*.jpg'))
-    
-    # Prepare arguments for parallel processing
-    process_args = [(img, model_file, scaler_file, params) for img in test_images]
-    
-    # Create output file
-    output_file = os.path.join(params.dir_save_files, 'task1gt_rezultate_detectie.txt')
-    
-    # Increase number of processes
-    num_processes = min(12, mp.cpu_count())  # Increased from 8 to 12
-    print(f"\nProcessing images with {num_processes} processes...")
+    test_images = glob.glob(os.path.join(configuration.dir_test_examples, '*.jpg'))
+    process_args = [(img, model_file, scaler_file, configuration) for img in test_images]
+    output_file = os.path.join(configuration.dir_save_files, 'task1gt_rezultate_detectie.txt')
+    available_cpu_processes = min(12, mp.cpu_count())
+    print(f"\nProcessing images with {available_cpu_processes} processes...")
     
     # Run parallel processing with progress bar
-    with mp.Pool(processes=num_processes) as pool:
-        results = list(tqdm(pool.imap(process_image, process_args), 
+    with mp.Pool(processes=available_cpu_processes) as pool:
+        results = list(tqdm(pool.imap(detect_and_visualize_faces, process_args), 
                           total=len(test_images),
                           desc="Processing images"))
     
-    # Write results to file
     with open(output_file, 'w') as f:
         for result_list in results:
             for result in result_list:
                 f.write(f"{result}\n")
     
-    # Second pass: Process all detections with CNN
+    # Process with CNN
     print("\nProcessing detections with CNN classifier...")
-    process_detections_with_cnn(params)
-    
-    # Process detections for Task 2
+    process_detections_with_cnn(configuration)
     print("\nProcessing detections for Task 2...")
-    char_detections = process_detections_for_task2(params)
+    char_detections = process_detections_for_task2(configuration)
     
-    # Evaluate Task 2 results
     print("\nEvaluating Task 2 results...")
-    evaluate_task2(params)
-    
+    evaluate_task2(configuration)
     print(f"\nProcessing complete. Results in {detections_dir}")
 
 if __name__ == "__main__":

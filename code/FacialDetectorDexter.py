@@ -22,16 +22,13 @@ class FacialDetectorDexter:
         self.model = None
         self.scaler = None
         self.detector = None
-        # Initialize CNN classifier silently
         self.has_cnn_model = False
         try:
             self.cnn_classifier = CNNFaceClassifier.load_latest_model()
             self.has_cnn_model = True
         except:
             self.cnn_classifier = None
-
     def load_classifier(self, model_file, scaler_file):
-        """Load trained model and scaler"""
         with open(model_file, 'rb') as f:
             self.model = pickle.load(f)
         with open(scaler_file, 'rb') as f:
@@ -41,22 +38,17 @@ class FacialDetectorDexter:
     def _compute_hog_features(self, image):
         """Minimal HOG computation for speed"""
         try:
-            # Quick resize and convert
             gray = cv.resize(image if len(image.shape) == 2 
                             else cv.cvtColor(image, cv.COLOR_BGR2GRAY), 
-                            (self.params.window_size, self.params.window_size))
-            
-            # Basic HOG with minimal parameters
-            features = hog(
-                gray,
-                orientations=self.params.orientations,
-                pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
+                            (self.params.detection_window_size, self.params.detection_window_size))
+            features = hog(gray,
+                orientations=self.params.number_of_orientations,
+                pixels_per_cell=(self.params.hog_cell_dimension, self.params.hog_cell_dimension),
                 cells_per_block=(self.params.cells_per_block, self.params.cells_per_block),
                 block_norm=self.params.block_norm,
                 transform_sqrt=False,
                 feature_vector=True
             )
-            
             return features
             
         except Exception as e:
@@ -64,15 +56,11 @@ class FacialDetectorDexter:
             return None
 
     def get_positive_descriptors(self, window_size):
-        """Calculate descriptors for positive examples at given window size"""
-        # Delete existing descriptor file to force regeneration
         descriptor_file = os.path.join(self.params.dir_save_files,
-                                     f'descriptoriExemplePozitive_{self.params.dim_hog_cell}_'
+                                     f'descriptoriExemplePozitive_{self.params.hog_cell_dimension}_'
                                      f'{self.params.number_positive_examples}_size_{window_size}.npy')
-        
         if os.path.exists(descriptor_file):
-            os.remove(descriptor_file)  # Force regeneration
-
+            os.remove(descriptor_file)
         images_path = os.path.join(self.params.dir_pos_examples, '*.jpg')
         files = glob.glob(images_path)
         positive_descriptors = []
@@ -83,14 +71,12 @@ class FacialDetectorDexter:
                 img = cv.imread(file)
                 if img is None:
                     continue
-                    
-                # Get HOG features
+                 
                 features = self._compute_hog_features(img)
                 if features is not None:
                     positive_descriptors.append(features)
                 
                 if self.params.use_flip_images:
-                    # Add flipped version
                     features_flip = self._compute_hog_features(np.fliplr(img))
                     if features_flip is not None:
                         positive_descriptors.append(features_flip)
@@ -107,9 +93,8 @@ class FacialDetectorDexter:
         return positive_descriptors
 
     def get_negative_descriptors(self, window_size):
-        """Calculate descriptors for negative examples at given window size"""
         descriptor_file = os.path.join(self.params.dir_save_files,
-                                     f'descriptoriExempleNegative_{self.params.dim_hog_cell}_'
+                                     f'descriptoriExempleNegative_{self.params.hog_cell_dimension}_'
                                      f'{self.params.number_negative_examples}_size_{window_size}.npy')
         
         if os.path.exists(descriptor_file):
@@ -127,25 +112,19 @@ class FacialDetectorDexter:
                 img = cv.imread(files[i])
                 if img is None:
                     continue
-                    
                 num_rows = img.shape[0]
                 num_cols = img.shape[1]
                 
-                # Skip if image is too small
                 if num_rows < window_size or num_cols < window_size:
                     continue
-                
-                # Generate random patches
                 x = np.random.randint(0, num_cols - window_size, size=num_negative_per_image)
                 y = np.random.randint(0, num_rows - window_size, size=num_negative_per_image)
-                
                 for idx in range(len(y)):
                     try:
                         patch = img[y[idx]:y[idx] + window_size, x[idx]:x[idx] + window_size]
                         features = self._compute_hog_features(patch)
                         if features is not None:
                             negative_descriptors.append(features)
-                            
                     except Exception as e:
                         print(f"Error processing patch: {e}")
                         continue
@@ -163,12 +142,10 @@ class FacialDetectorDexter:
 
 
     def train_classifier(self, training_examples_dict, train_labels_dict):
-        """Train unified model for all window sizes"""
         self.model, self.scaler = train_unified_model(self.params, training_examples_dict, train_labels_dict)
         self.detector = SlidingWindowDetector(self.params, self.model, self.scaler)
 
     def run(self):
-        """Run detection on test images"""
         if self.detector is None:
             raise RuntimeError("Detector not initialized. Call load_classifier first.")
             
@@ -177,8 +154,6 @@ class FacialDetectorDexter:
         all_detections = []
         all_scores = []
         all_file_names = []
-        
-        # Load ground truth if available
         ground_truth_dict = {}
         if self.params.has_annotations:
             try:
@@ -196,25 +171,16 @@ class FacialDetectorDexter:
             image_name = ntpath.basename(image_path)
             print(f'Processing {image_name}...')
             image = cv.imread(image_path)
-            
             if image is None:
                 print(f"Could not load image: {image_path}")
                 continue
             
-            # Run detector
-            detections, scores = self.detector.detect_faces(image)
-            
-            # Get ground truth for current image
+            detections, scores = self.detector.find_faces_with_sliding_window(image)
             ground_truth = ground_truth_dict.get(image_name, [])
             
             if len(detections) > 0:
-                # Apply NMS
                 detections, scores = self.non_maximal_suppression(detections, scores, image.shape[:2])
-            
-            # Show current results (even if no detections)
             self.show_current_image_results(image, detections, scores, ground_truth, image_name)
-            
-            # Add to overall results if there are detections
             if len(detections) > 0:
                 all_detections.extend(detections)
                 all_scores.extend(scores)
@@ -224,20 +190,17 @@ class FacialDetectorDexter:
                np.array(all_scores) if all_scores else np.array([]), \
                np.array(all_file_names) if all_file_names else np.array([])
 
-    def intersection_over_union(self, bbox_a, bbox_b):
-        x_a = max(bbox_a[0], bbox_b[0])
-        y_a = max(bbox_a[1], bbox_b[1])
-        x_b = min(bbox_a[2], bbox_b[2])
-        y_b = min(bbox_b[3], bbox_b[3])
+    def intersection_over_union(self, first_bounding_box, second_bounding_box):
+        intersection_x_min = max(first_bounding_box[0], second_bounding_box[0])
+        intersection_y_min = max(first_bounding_box[1], second_bounding_box[1])
+        bounding_box_a_x_max = min(first_bounding_box[2], second_bounding_box[2])
+        bounding_box_b_y_max = min(second_bounding_box[3], second_bounding_box[3])
+        intersection_area = max(0, ((bounding_box_a_x_max - intersection_x_min) + 1)) * max(0, ((bounding_box_b_y_max - intersection_y_min) + 1))
+        box_a_area = ((first_bounding_box[2] - first_bounding_box[0]) + 1) * ((first_bounding_box[3] - first_bounding_box[1]) + 1)
+        box_b_area = ((second_bounding_box[2] - second_bounding_box[0]) + 1) * ((second_bounding_box[3] - second_bounding_box[1]) + 1)
 
-        inter_area = max(0, ((x_b - x_a) + 1)) * max(0, ((y_b - y_a) + 1))
-
-        box_a_area = ((bbox_a[2] - bbox_a[0]) + 1) * ((bbox_a[3] - bbox_a[1]) + 1)
-        box_b_area = ((bbox_b[2] - bbox_b[0]) + 1) * ((bbox_b[3] - bbox_b[1]) + 1)
-
-        iou = (inter_area / float(((box_a_area + box_b_area) - inter_area)))
-
-        return iou
+        intersection_over_union = (intersection_area / float(((box_a_area + box_b_area) - intersection_area)))
+        return intersection_over_union
 
     def non_maximal_suppression(self, image_detections, image_scores, image_size):
         """
@@ -275,107 +238,48 @@ class FacialDetectorDexter:
         #                         is_maximal[j] = False
         # return (sorted_image_detections[is_maximal], sorted_scores[is_maximal])
         
-        """Improved NMS with better overlap handling"""
         if len(image_detections) == 0:
             return np.array([]), np.array([])
             
-        # Convert to float for better precision
-        boxes = image_detections.astype(np.float32)
+        detected_bounding_boxes = image_detections.astype(np.float32)
         scores = image_scores.astype(np.float32)
         
-        # Get coordinates
-        x1 = boxes[:, 0]
-        y1 = boxes[:, 1]
-        x2 = boxes[:, 2]
-        y2 = boxes[:, 3]
-        
-        # Calculate areas
-        areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-        
-        # Sort by score
+        box_min_x = detected_bounding_boxes[:, 0]
+        box_min_y = detected_bounding_boxes[:, 1]
+        box_max_x = detected_bounding_boxes[:, 2]
+        box_max_y = detected_bounding_boxes[:, 3]
+        areas = (box_max_x - box_min_x + 1) * (box_max_y - box_min_y + 1)
         order = scores.argsort()[::-1]
         
-        keep = []
+        selected_indices = []
         while order.size > 0:
             i = order[0]
-            keep.append(i)
+            selected_indices.append(i)
+            overlap_min_x = np.maximum(box_min_x[i], box_min_x[order[1:]])
+            overlap_minimum_y = np.maximum(box_min_y[i], box_min_y[order[1:]])
+            bounding_box_max_x = np.minimum(box_max_x[i], box_max_x[order[1:]])
+            bounding_box_max_y = np.minimum(box_max_y[i], box_max_y[order[1:]])
             
-            # Calculate IoU with rest
-            xx1 = np.maximum(x1[i], x1[order[1:]])
-            yy1 = np.maximum(y1[i], y1[order[1:]])
-            xx2 = np.minimum(x2[i], x2[order[1:]])
-            yy2 = np.minimum(y2[i], y2[order[1:]])
+            intersection_width = np.maximum(0.0, bounding_box_max_x - overlap_min_x + 1)
+            intersection_height = np.maximum(0.0, bounding_box_max_y - overlap_minimum_y + 1)
+            inter = intersection_width * intersection_height
+            intersection_over_union_ratio = inter / (areas[i] + areas[order[1:]] - inter)
             
-            w = np.maximum(0.0, xx2 - xx1 + 1)
-            h = np.maximum(0.0, yy2 - yy1 + 1)
-            inter = w * h
-            
-            # Calculate IoU
-            ovr = inter / (areas[i] + areas[order[1:]] - inter)
-            
-            # Get indices of boxes with IoU <= threshold
-            inds = np.where(ovr <= 0.3)[0]
+            inds = np.where(intersection_over_union_ratio <= 0.3)[0]
             order = order[inds + 1]
         
-        return boxes[keep].astype(np.int32), scores[keep]
-
-    def get_combined_descriptor(self, image, window_size):
-        """Get combined HOG and color features for a window"""
-        # Store feature dimensions if we haven't yet
-        if not hasattr(self, 'feature_dimensions'):
-            self.feature_dimensions = {}
-        
-        # Resize first to reduce computation
-        if len(image.shape) == 3:
-            gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            gray = image
-            
-        # Resize to window size if needed
-        if gray.shape != (window_size, window_size):
-            gray = cv.resize(gray, (window_size, window_size))
-        
-        # Get HOG features with fixed parameters
-        hog_features = hog(gray, 
-                          pixels_per_cell=(self.params.dim_hog_cell, self.params.dim_hog_cell),
-                          cells_per_block=(2, 2),
-                          orientations=9,
-                          feature_vector=True)
-        
-        # Just use HOG features for consistency
-        features = hog_features
-        
-        # Store feature dimension for this window size
-        self.feature_dimensions[window_size] = len(features)
-        
-        return features
+        return detected_bounding_boxes[selected_indices].astype(np.int32), scores[selected_indices]
 
     
     def classify_face(self, image, bbox):
-        """
-        Classify a detected face using the CNN classifier
-        
-        Args:
-            image: Full image (OpenCV/numpy format)
-            bbox: Bounding box coordinates [x1, y1, x2, y2]
-        
-        Returns:
-            tuple: (predicted_member, confidence)
-        """
         if self.cnn_classifier is None:
             return "unknown", 0.0
-            
         try:
             # Extract face region
-            x1, y1, x2, y2 = map(int, bbox)
-            face_img = image[y1:y2, x1:x2]
-            
-            # Convert from OpenCV to PIL format
-            # OpenCV uses BGR, PIL uses RGB
+            face_bbox_x1, bounding_box_y1, bounding_box_x2, bounding_box_y2 = map(int, bbox)
+            face_img = image[bounding_box_y1:bounding_box_y2, face_bbox_x1:bounding_box_x2]
             face_img_rgb = cv.cvtColor(face_img, cv.COLOR_BGR2RGB)
             pil_image = Image.fromarray(face_img_rgb)
-            
-            # Use CNN classifier to predict
             predicted_member, confidence, _ = self.cnn_classifier.predict(pil_image)
             return predicted_member, confidence
             
@@ -383,79 +287,54 @@ class FacialDetectorDexter:
             print(f"Error in face classification: {e}")
             return "unknown", 0.0
         
-    def show_current_image_results(self, image, detections, scores, ground_truth, image_name, save_only=False):
-        """Show results for current image with detections and ground truth"""
-        viz_img = image.copy()
-        
-        # Draw ground truth boxes in green
-        for gt_box in ground_truth:
-            x1, y1, x2, y2 = map(int, gt_box)
-            cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        
-        # Draw detections with scores and classifications
-        for det, det_score in zip(detections, scores):
-            x1, y1, x2, y2 = map(int, det)
+    def show_current_image_results(self, image, detections, scores, true_bounding_boxes, image_name, save_only=False):
+        visualized_image = image.copy()
+        for ground_truth_bounding_box in true_bounding_boxes:
+            bounding_box_x1, bounding_box_top_y, bounding_box_x2, bounding_box_bottom_y = map(int, ground_truth_bounding_box)
+            cv.rectangle(visualized_image, (bounding_box_x1, bounding_box_top_y), (bounding_box_x2, bounding_box_bottom_y), (0, 255, 0), 2)
+        # Desenam dreptunghiurile gasite pentru fiecare detectie
+        for detection_bounding_box, detection_confidence in zip(detections, scores):
+            bounding_box_x1, bounding_box_top_y, bounding_box_x2, bounding_box_bottom_y = map(int, detection_bounding_box)    
+            cv.rectangle(visualized_image, (bounding_box_x1, bounding_box_top_y), (bounding_box_x2, bounding_box_bottom_y), (0, 0, 255), 2)
             
-            # Draw bounding box
-            cv.rectangle(viz_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            text_font = cv.FONT_HERSHEY_SIMPLEX
+            text_font_scale = 0.5
+            line_thickness = 2
+            text_padding = 5
             
-            # Text settings
-            font = cv.FONT_HERSHEY_SIMPLEX
-            font_scale = 0.5
-            thickness = 2
-            padding = 5
-            
-            # Prepare detection text
             if self.has_cnn_model:
-                # Get face classification
-                member, conf = self.classify_face(image, det)
-                score_text = f"Score: {det_score:.2f}"
-                class_text = f"{member}: {conf:.2f}"
+                # Clasificam
+                classified_face, classification_confidence = self.classify_face(image, detection_bounding_box)
+                detection_score_text = f"Score: {detection_confidence:.2f}"
+                face_classification_text = f"{classified_face}: {classification_confidence:.2f}"
             else:
                 # Simple detection score when no CNN model
-                score_text = f"Score: {det_score:.2f}"
-                class_text = "No CNN Model"
+                detection_score_text = f"Score: {detection_confidence:.2f}"
+                face_classification_text = "No CNN Model"
             
             # Get text sizes
-            (score_w, score_h), _ = cv.getTextSize(score_text, font, font_scale, thickness)
-            (class_w, class_h), _ = cv.getTextSize(class_text, font, font_scale, thickness)
+            (score_w, score_h), _ = cv.getTextSize(detection_score_text, text_font, text_font_scale, line_thickness)
+            (class_w, class_h), _ = cv.getTextSize(face_classification_text, text_font, text_font_scale, line_thickness)
             
-            # Calculate background rectangle positions
-            bg_x1 = x1
-            bg_y1 = y1 - (score_h + class_h + 3 * padding)
-            bg_x2 = max(x1 + score_w, x1 + class_w) + padding
-            bg_y2 = y1
+            background_x1_coordinate = bounding_box_x1
+            background_top_y_coordinate = bounding_box_top_y - (score_h + class_h + 3 * text_padding)
+            background_bounding_box_x2 = max(bounding_box_x1 + score_w, bounding_box_x1 + class_w) + text_padding
+            background_bottom_y = bounding_box_top_y
             
-            # Draw semi-transparent background
-            overlay = viz_img.copy()
-            cv.rectangle(overlay, 
-                        (bg_x1, bg_y1), 
-                        (bg_x2, bg_y2), 
-                        (0, 0, 0), 
-                        -1)
-            cv.addWeighted(overlay, 0.6, viz_img, 0.4, 0, viz_img)
-            
-            # Draw texts
-            cv.putText(viz_img, 
-                      score_text,
-                      (x1 + padding, y1 - class_h - padding),
-                      font,
-                      font_scale,
-                      (255, 255, 255),
-                      thickness)
-            cv.putText(viz_img, 
-                      class_text,
-                      (x1 + padding, y1 - padding),
-                      font,
-                      font_scale,
-                      (255, 255, 255),
-                      thickness)
+            visualization_overlay = visualized_image.copy()
+            cv.rectangle(visualization_overlay, (background_x1_coordinate, background_top_y_coordinate), (background_bounding_box_x2, background_bottom_y), (0, 0, 0), -1)
+            cv.addWeighted(visualization_overlay, 0.6, visualized_image, 0.4, 0, visualized_image)
+            # Texte
+            cv.putText(visualized_image, detection_score_text,
+                      (bounding_box_x1 + text_padding, bounding_box_top_y - class_h - text_padding),
+                      text_font, text_font_scale, (255, 255, 255),line_thickness)
+            cv.putText(visualized_image, face_classification_text,(bounding_box_x1 + text_padding, bounding_box_top_y - text_padding),
+                      text_font, text_font_scale, (255, 255, 255),line_thickness)
         
         if not save_only:
-            # Show image if not save_only
             window_name = f'Results_{image_name}'
             try:
-                cv.imshow(window_name, viz_img)
+                cv.imshow(window_name, visualized_image)
                 while True:
                     key = cv.waitKey(100)
                     if key != -1 or cv.getWindowProperty(window_name, cv.WND_PROP_VISIBLE) < 1:
@@ -464,6 +343,6 @@ class FacialDetectorDexter:
                 cv.destroyWindow(window_name)
                 cv.waitKey(1)
         
-        # Save visualization
+        # Save img
         output_path = os.path.join(self.params.dir_save_files, f'detection_{image_name}')
-        cv.imwrite(output_path, viz_img)
+        cv.imwrite(output_path, visualized_image)
