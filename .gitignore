@@ -51,9 +51,9 @@ venv.bak/
 *.pdf
 
 # Model files and data
-*.pth
-*.pt
-*.pkl
+# *.pth
+# *.pt
+# *.pkl
 *.npy
 *.npz
 *.h5
@@ -85,9 +85,8 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific directories
-antrenare/
+# antrenare/
 evaluare/
 data/
 testare/
 validare/
-fisiere_salvate_algoritm/

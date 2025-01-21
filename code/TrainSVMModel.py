@@ -8,20 +8,6 @@ from Parameters import Parameters
 from skimage.feature import hog
 import cv2 as cv
 
-def compute_fixed_features(feature_vector, target_size=64):
-    """Ensure all feature vectors have consistent dimensions"""
-    if len(feature_vector.shape) == 1:
-        # If already 1D, verify length is consistent
-        expected_length = compute_expected_features_length(target_size)
-        if len(feature_vector) == expected_length:
-            return feature_vector
-    
-    # Compute expected feature length
-    expected_length = compute_expected_features_length(target_size)
-    
-    # Return properly sized feature vector
-    return np.resize(feature_vector, expected_length)
-
 def compute_expected_features_length(window_size, cell_size=8):
     """Calculate expected HOG feature dimension for a given window size"""
     cells_per_block = 2

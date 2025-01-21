@@ -5,7 +5,6 @@ import os
 import cv2 as cv
 import numpy as np
 from PIL import Image
-from Visualize import render_detection_window, show_detection_results
 
 class CustomCNN(nn.Module):
     def __init__(self, num_classes=5):
@@ -140,7 +139,6 @@ class CNNFaceClassifier:
         window_size = 64  # Base window size
         stride = 32      # Stride size
         
-        # Create image pyramid
         scale = 1.0
         min_size = 64
         

@@ -46,15 +46,6 @@ class SlidingWindowDetector:
         
         return fixed_params
 
-    def compute_features(self, window):
-        """Simplified feature computation with fixed parameters"""
-        # Enhance contrast
-        window = cv.equalizeHist(window)
-        
-        # Resize and compute HOG with fixed parameters
-        window_resized = cv.resize(window, (64, 64))  # Fixed size
-        features = hog(window_resized, feature_vector=True, **self.hog_params)
-        return features
         
     def _generate_window_sizes(self, min_size=60, max_size=300, num_base_sizes=15):
         """Generate window sizes with variable aspect ratios"""
@@ -122,23 +113,18 @@ class SlidingWindowDetector:
             # Slide window
             for y in range(0, gray.shape[0] - window_height + 1, stride_h):
                 for x in range(0, gray.shape[1] - window_width + 1, stride_w):
-                    # Quick variance check
+                    # Varianta
                     x2, y2 = x + window_width, y + window_height
                     area = window_width * window_height
-                    
-                    # Calculate using integral image
                     sum_val = (integral_img[y2, x2] - integral_img[y2, x] - 
                               integral_img[y, x2] + integral_img[y, x])
                     sum_sqr = (integral_sqr[y2, x2] - integral_sqr[y2, x] - 
                               integral_sqr[y, x2] + integral_sqr[y, x])
-                    
                     mean = sum_val / area
                     variance = (sum_sqr / area) - (mean ** 2)
-                    
-                    if variance < var_threshold:  # Skip low-variance regions
+                    if variance < var_threshold:
                         continue
                     
-                    # Extract and resize window
                     window = gray[y:y2, x:x2]
                     window_resized = cv.resize(window, (64, 64))
                     
@@ -171,76 +157,3 @@ class SlidingWindowDetector:
         
         return np.array([]), np.array([])
         
-    def visualize_all_windows(self):
-        """Store visualization without displaying"""
-        # Create canvas matching test image dimensions
-        canvas_size = (480, 640)
-        canvas = np.zeros((canvas_size[0], canvas_size[1], 3), dtype=np.uint8)
-        
-        # Calculate center
-        center_y = canvas_size[0] // 2
-        center_x = canvas_size[1] // 2
-        
-        # Draw center point
-        cv.circle(canvas, (center_x, center_y), 3, (255, 255, 255), -1)
-        
-        # Generate colors for different window sizes
-        num_windows = len(self.window_sizes)
-        colors = [
-            (int(255 * (1 - i / num_windows)),  # More blue for smaller windows
-             int(255 * (i / num_windows)),      # More green for larger windows
-             128)                               # Constant red component
-            for i in range(num_windows)
-        ]
-        
-        # Draw each window centered
-        for (w, h), color in zip(self.window_sizes, colors):
-            # Calculate coordinates to center the window
-            x = center_x - w // 2
-            y = center_y - h // 2
-            
-            # Make sure window doesn't go outside canvas
-            if x < 0 or y < 0 or x + w > canvas_size[1] or y + h > canvas_size[0]:
-                # Scale down window if it's too large
-                scale = min(
-                    canvas_size[1] / w,
-                    canvas_size[0] / h,
-                    0.8  # Maximum scale factor to leave room for text
-                )
-                w_scaled = int(w * scale)
-                h_scaled = int(h * scale)
-                x = center_x - w_scaled // 2
-                y = center_y - h_scaled // 2
-                w, h = w_scaled, h_scaled
-            
-            # Draw rectangle
-            cv.rectangle(canvas, 
-                        (x, y), 
-                        (x + w, y + h), 
-                        color, 
-                        1)  # Thinner lines
-            
-            # Add size text (smaller and more compact)
-            text = f"{w}x{h}"
-            font_scale = 0.4
-            cv.putText(canvas, 
-                      text,
-                      (x + 2, y + 12),
-                      cv.FONT_HERSHEY_SIMPLEX,
-                      font_scale,
-                      color,
-                      1)
-        
-        # Add title
-        title = f"Detection Windows ({len(self.window_sizes)})"
-        cv.putText(canvas,
-                  title,
-                  (10, 20),
-                  cv.FONT_HERSHEY_SIMPLEX,
-                  0.5,
-                  (255, 255, 255),
-                  1)
-        
-        # Save the visualization
-        output_path = os.path.join(self.params.dir_save_files, 'detection_windows.png')
-        cv.imwrite(output_path, canvas)

@@ -1,6 +1,5 @@
 from Parameters import *
 from FacialDetectorDexter import *
-from Visualize import *
 import os
 import multiprocessing as mp
 from tqdm import tqdm
@@ -296,7 +295,6 @@ def run_classifier():
     # Print all initialization info at once
     print("\nInitialization Summary:")
     print(f"Number of window sizes: {window_count}")
-    print("CNN Model: Not available - will use basic detections")
     print("\nStarting detection...")
     
     # Create detections directory

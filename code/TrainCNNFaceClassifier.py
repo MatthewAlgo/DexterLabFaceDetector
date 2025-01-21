@@ -58,7 +58,7 @@ class ClasificatorCNN(nn.Module):
             nn.ReLU(),
             nn.BatchNorm2d(256),
             nn.MaxPool2d(2),
-            nn.Conv2d(256, 256, kernel_size=3, padding=1),  # New: Additional convolutional layer for better feature extraction
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.BatchNorm2d(256)
         )
@@ -68,12 +68,12 @@ class ClasificatorCNN(nn.Module):
         model = nn.Sequential(
             nn.Linear(256 * 12 * 12, 512),
             nn.ReLU(),
-            nn.BatchNorm1d(512),  # Added batch norm
+            nn.BatchNorm1d(512),
             nn.Dropout(0.5),
-            nn.Linear(512, 256),  # New intermediate layer
+            nn.Linear(512, 256), 
             nn.ReLU(),
-            nn.Dropout(0.3),  # Lower dropout for deeper layer
-            nn.Linear(256, num_classes)  # Modified for num_classes output
+            nn.Dropout(0.3), 
+            nn.Linear(256, num_classes)
         )
         return model
     
@@ -169,7 +169,7 @@ def train_model(model, train_loader, valid_loader, criterion, optimizer, num_epo
 def main():
     # Load dataset
     full_dataset = datasets.ImageFolder(
-        root='../antrenare/train_cnn',
+        root='../antrenare/fisiere_salvate_algoritm/train_cnn',
         transform=train_transforms
     )
     

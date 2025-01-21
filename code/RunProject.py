@@ -1,6 +1,5 @@
 from Parameters import *
 from FacialDetectorDexter import *
-from Visualize import *
 import numpy as np
 import os
 import glob
